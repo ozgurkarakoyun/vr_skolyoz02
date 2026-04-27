@@ -263,68 +263,107 @@ function drawOverlay(kps, a, scolPoints) {
   const line=(a,b,c,w,d=false)=>{if(!a||!b)return;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=c;ctx.lineWidth=w;ctx.setLineDash(d?[6,4]:[]);ctx.stroke();ctx.setLineDash([]);};
   const mid=(a,b)=>a&&b?[(a[0]+b[0])/2,(a[1]+b[1])/2]:null;
 
-  // ── Bounding Box (anatomik referans çerçeve) ──
-  if(a.person_bbox){
-    const [bx1,by1,bx2,by2]=a.person_bbox;
-    const sbx1=bx1*sx, sby1=by1*sy, sbx2=bx2*sx, sby2=by2*sy;
-    ctx.strokeStyle='rgba(0,229,255,.35)';
-    ctx.lineWidth=1.5;
-    ctx.setLineDash([8,5]);
-    ctx.strokeRect(sbx1, sby1, sbx2-sbx1, sby2-sby1);
-    ctx.setLineDash([]);
-    // BBOX köşe işaretleri
-    const cs=10; // corner size
-    ctx.strokeStyle='rgba(0,229,255,.7)';
-    ctx.lineWidth=2;
-    [[sbx1,sby1,1,1],[sbx2,sby1,-1,1],[sbx1,sby2,1,-1],[sbx2,sby2,-1,-1]].forEach(([x,y,dx,dy])=>{
+  // Marker'lar bbox'a ihtiyaç duymaz
+
+  // ── 9 ANATOMİK MARKER ─────────────────────────────────────
+  if(a.anatomy){
+    const ana = a.anatomy;
+    const toAna = name => ana[name] ? [ana[name][0]*sx, ana[name][1]*sy] : null;
+
+    const t1 = toAna('t1');
+    const ra = toAna('right_acromion');
+    const la = toAna('left_acromion');
+    const tApex = toAna('t_apex');
+    const tlApex = toAna('tl_apex');
+    const lApex = toAna('l_apex');
+    const l5 = toAna('l5');
+    const rPsis = toAna('right_psis');
+    const lPsis = toAna('left_psis');
+
+    // Omurga hattı (T1 → T-Apex → TL-Apex → L-Apex → L5) — sarı
+    const spine = [t1, tApex, tlApex, lApex, l5].filter(Boolean);
+    if(spine.length >= 2){
       ctx.beginPath();
-      ctx.moveTo(x+dx*cs, y); ctx.lineTo(x, y); ctx.lineTo(x, y+dy*cs);
+      ctx.moveTo(spine[0][0], spine[0][1]);
+      for(let i=1; i<spine.length; i++) ctx.lineTo(spine[i][0], spine[i][1]);
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 3;
       ctx.stroke();
+    }
+
+    // Omuz çizgisi (kırmızı)
+    if(ra && la){
+      const angle = a.shoulder_angle || 0;
+      const segCol = Math.abs(angle) > 5 ? '#ff4757' : (Math.abs(angle) > 2 ? '#ffa502' : '#2ed573');
+      line(ra, la, segCol, 3);
+    }
+
+    // PSIS çizgisi (yeşil)
+    if(rPsis && lPsis){
+      const angle = a.pelvic_tilt || 0;
+      const segCol = Math.abs(angle) > 5 ? '#ff4757' : (Math.abs(angle) > 2 ? '#ffa502' : '#2ed573');
+      line(rPsis, lPsis, segCol, 3);
+    }
+
+    // ── Marker noktaları (renkli, etiketli) ──
+    const markers = [
+      {pt: t1, color: '#00d4ff', label: 'T1'},
+      {pt: ra, color: '#ff5252', label: 'R-Akr'},
+      {pt: la, color: '#ff5252', label: 'L-Akr'},
+      {pt: tApex, color: '#ffd700', label: 'T-Apex'},
+      {pt: tlApex, color: '#ffd700', label: 'TL-Apex'},
+      {pt: lApex, color: '#ffd700', label: 'L-Apex'},
+      {pt: l5, color: '#00d4ff', label: 'L5'},
+      {pt: rPsis, color: '#2ed573', label: 'R-PSIS'},
+      {pt: lPsis, color: '#2ed573', label: 'L-PSIS'},
+    ];
+    markers.forEach(m => {
+      if(!m.pt) return;
+      // Beyaz daire (arka plan)
+      ctx.beginPath();
+      ctx.arc(m.pt[0], m.pt[1], 7, 0, Math.PI*2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      // Renkli iç
+      ctx.beginPath();
+      ctx.arc(m.pt[0], m.pt[1], 4, 0, Math.PI*2);
+      ctx.fillStyle = m.color;
+      ctx.fill();
+      // Etiket
+      ctx.fillStyle = m.color;
+      ctx.font = 'bold 10px monospace';
+      ctx.fillText(m.label, m.pt[0] + 10, m.pt[1] - 6);
     });
-    // Etiket
-    ctx.fillStyle='rgba(0,229,255,.7)';
-    ctx.font='10px monospace';
-    ctx.fillText('GÖVDE', sbx1+4, sby1-4);
+
+    // Cobb açısı etiketleri (omurganın yanında)
+    if(a.scoliosis){
+      ctx.font = 'bold 11px monospace';
+      const angles = [
+        {pt: tApex, val: a.scoliosis.thoracic, lbl: 'T'},
+        {pt: tlApex, val: a.scoliosis.thoracolumbar, lbl: 'TL'},
+        {pt: lApex, val: a.scoliosis.lumbar, lbl: 'L'},
+      ];
+      angles.forEach(({pt, val, lbl}) => {
+        if(!pt) return;
+        const col = val > 25 ? '#ff4757' : (val > 10 ? '#ffa502' : '#2ed573');
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(pt[0] + 14, pt[1] - 6, 60, 16);
+        ctx.fillStyle = col;
+        ctx.fillText(`${lbl}: ${val.toFixed(1)}°`, pt[0] + 16, pt[1] + 5);
+      });
+    }
   }
 
-  // Schroth pose overlay
-  const ls=toC(kps.left_shoulder),rs=toC(kps.right_shoulder),lh=toC(kps.left_hip),rh=toC(kps.right_hip);
-  const lk=toC(kps.left_knee),rk=toC(kps.right_knee);
-  if(ls&&rs&&lh&&rh){
-    line(ls,rs,col,3); line(lh,rh,col,3);
-    line(ls,lh,'rgba(0,229,255,.5)',2,true); line(rs,rh,'rgba(0,229,255,.5)',2,true);
-    const sc=mid(ls,rs), hc=mid(lh,rh);
-    line(sc,hc,'rgba(255,255,255,.2)',1.5,true);
-    if(lk&&rk){line(lh,lk,'rgba(0,229,255,.3)',1.5,true);line(rh,rk,'rgba(0,229,255,.3)',1.5,true);line(lk,rk,col,1.5);}
-    [ls,rs,lh,rh,lk,rk].filter(Boolean).forEach(pt=>{ctx.beginPath();ctx.arc(pt[0],pt[1],6,0,Math.PI*2);ctx.fillStyle=col;ctx.fill();ctx.beginPath();ctx.arc(pt[0],pt[1],3.5,0,Math.PI*2);ctx.fillStyle='#050a0f';ctx.fill();});
-    if(sc&&Math.abs(a.shoulder_angle||0)>1){ctx.fillStyle=col;ctx.font='bold 12px sans-serif';ctx.fillText((a.shoulder_angle||0).toFixed(1)+'°',sc[0]+8,sc[1]-7);}
-  }
-
-  // ── Orijinal model_point4.pt noktaları — sarı çizgi ──
-  if(scolPoints && scolPoints.length >= 2) {
-    const scaledPts = scolPoints.map(p => [p[0]*sx, p[1]*sy]);
-    // Segmentler arası çizgi
-    ctx.beginPath();
-    ctx.moveTo(scaledPts[0][0], scaledPts[0][1]);
-    for(let i=1; i<scaledPts.length; i++) ctx.lineTo(scaledPts[i][0], scaledPts[i][1]);
-    ctx.strokeStyle = '#ffd700';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([]);
-    ctx.stroke();
-    // Noktalar
-    scaledPts.forEach((pt, i) => {
-      ctx.beginPath();
-      ctx.arc(pt[0],pt[1],8,0,Math.PI*2);
-      ctx.fillStyle='#ffd700'; ctx.fill();
-      ctx.beginPath();
-      ctx.arc(pt[0],pt[1],5,0,Math.PI*2);
-      ctx.fillStyle='#050a0f'; ctx.fill();
-      // Nokta etiketi
-      const labels=['T1','T2','T3','T4'];
-      ctx.fillStyle='#ffd700';
-      ctx.font='bold 11px sans-serif';
-      ctx.fillText(labels[i]||i, pt[0]+10, pt[1]-5);
-    });
+  // ── Marker tespit durumu ──
+  if(a.marker){
+    const det = a.marker.detected_markers || 0;
+    const req = a.marker.required_markers || 9;
+    const allOk = det >= req;
+    ctx.fillStyle = allOk ? 'rgba(46,213,115,0.85)' : 'rgba(255,165,2,0.85)';
+    ctx.fillRect(canvas.width - 90, 8, 82, 22);
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(`Marker: ${det}/${req}`, canvas.width - 84, 23);
   }
 }
 </script>
