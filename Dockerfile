@@ -28,22 +28,25 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 5. cpuinfo
 RUN pip install --no-cache-dir py-cpuinfo
 
-# 6. Ultralytics
+# 6. Ultralytics (yedek pose model için)
 RUN pip install --no-cache-dir ultralytics==8.3.40 --no-deps
 
-# 7. Full opencv geldiyse temizle
+# 7. SpinePose — ana pose modeli (sırta dönük çalışır + 9 omurga noktası)
+RUN pip install --no-cache-dir spinepose
+
+# 8. Full opencv geldiyse temizle
 RUN pip uninstall -y opencv-python || true
 
-# 8. Doğrula
+# 9. Doğrula
 RUN python -c "import numpy; print('[OK] numpy', numpy.__version__)"
 RUN python -c "import torch; print('[OK] torch', torch.__version__)"
 RUN python -c "import cv2; print('[OK] cv2', cv2.__version__)"
 RUN python -c "import cpuinfo; print('[OK] cpuinfo OK')"
 RUN python -c "from ultralytics import YOLO; print('[OK] ultralytics OK')"
+RUN python -c "from spinepose import SpinePoseEstimator; print('[OK] spinepose OK')"
 
 COPY . .
 
 EXPOSE 8080
 
-# Startup'ta önce modelleri indir, sonra gunicorn'u başlat
-CMD ["sh", "-c", "python download_models.py && gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT --timeout 120 app:app"]
+CMD ["sh", "-c", "python download_models.py && gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:$PORT --timeout 180 app:app"]
