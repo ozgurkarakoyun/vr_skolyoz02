@@ -237,6 +237,28 @@ def _mock_schroth(analyzer, np):
     return r or {}
 
 
+# ─── Sayfa Route'ları ────────────────────────────────────────
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/therapist')
+def therapist():
+    return render_template('therapist.html')
+
+@app.route('/phone')
+def phone():
+    return render_template('phone.html')
+
+@app.route('/quest')
+def quest():
+    return render_template('quest.html')
+
+@app.route('/patient/<int:pid>')
+def patient_detail(pid):
+    return render_template('patient_detail.html', patient_id=pid)
+
+
 # ─── Geçici Model Upload Endpoint ────────────────────────────
 # Sadece ADMIN_KEY env var ayarlıysa aktif olur.
 # Production için: ADMIN_KEY'i Railway Variables'dan silin → endpoint pasif olur.
