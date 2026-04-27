@@ -494,8 +494,10 @@ def on_frame(data):
         pid = _session_patients.get(room)
         if pid:
             analysis['patient_id'] = pid
+        # Hem analiz hem video frame'i Quest'e gönder
         emit('analysis', {
             'analysis': analysis,
+            'image': image_b64,  # Quest video gösterebilsin diye
             'timestamp': datetime.now().isoformat()
         }, to=room)
     except Exception as e:
