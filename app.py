@@ -103,34 +103,55 @@ except Exception as e:
     PDF_OK = False
     def generate_pdf(*a, **kw): return b""
 
-# ─── Pose model (lazy) ───────────────────────────────────────
+# ─── SpinePose model (lazy) ──────────────────────────────────
+# SpinePose: sırta dönük durumda da çalışır + 9 omurga noktası verir
+# 37 keypoint toplam: 17 body (COCO) + 9 spine + 11 extra (foot, head)
 _pose_model = None
+_use_spinepose = True  # SpinePose öncelikli, YOLO yedek
 
 def get_pose_model():
-    global _pose_model
-    if _pose_model is None:
-        import torch
-        _orig_load = torch.load
+    """
+    SpinePose model yüklenmesi.
+    SpinePose başarısız olursa YOLO'ya fallback.
+    """
+    global _pose_model, _use_spinepose
+
+    if _pose_model is not None:
+        return _pose_model
+
+    # 1. Öncelik: SpinePose
+    if _use_spinepose:
         try:
-            from ultralytics import YOLO
-
-            # PyTorch 2.6+ weights_only=True varsayılan yaptı.
-            # YOLO modellerini yüklemek için False gerekiyor.
-            torch.load = lambda *a, **kw: _orig_load(
-                *a, **{**kw, 'weights_only': False}
-            )
-
-            path = os.environ.get('MODEL_PATH', 'models/yolov8n-pose.pt')
-            if not os.path.exists(path):
-                logger.warning(f"Pose model bulunamadı: {path}")
-                return None
-            _pose_model = YOLO(path)
-            logger.info(f"Pose model loaded: {path}")
+            from spinepose import SpinePoseEstimator
+            # 'small' mode: hızlı, ~50 MB
+            # 'medium': dengeli, ~100 MB
+            # 'large': doğru ama yavaş
+            mode = os.environ.get('SPINEPOSE_MODE', 'small')
+            _pose_model = SpinePoseEstimator(device='cpu', mode=mode)
+            logger.info(f"SpinePose model loaded (mode={mode})")
+            return _pose_model
         except Exception as e:
-            logger.error(f"Pose model load failed: {e}")
-        finally:
-            # Hata olsa da olmasa da torch.load'u geri yükle
-            torch.load = _orig_load
+            logger.error(f"SpinePose load failed: {e} — YOLO'ya geçiliyor")
+            _use_spinepose = False
+
+    # 2. Yedek: YOLO
+    import torch
+    _orig_load = torch.load
+    try:
+        from ultralytics import YOLO
+        torch.load = lambda *a, **kw: _orig_load(
+            *a, **{**kw, 'weights_only': False}
+        )
+        path = os.environ.get('MODEL_PATH', 'models/yolov8n-pose.pt')
+        if not os.path.exists(path):
+            logger.warning(f"YOLO pose model bulunamadı: {path}")
+            return None
+        _pose_model = YOLO(path)
+        logger.info(f"YOLO pose model loaded: {path}")
+    except Exception as e:
+        logger.error(f"YOLO pose model load failed: {e}")
+    finally:
+        torch.load = _orig_load
     return _pose_model
 
 # ─── Seans havuzu ────────────────────────────────────────────
@@ -160,22 +181,70 @@ def process_frame(image_b64: str, room: str) -> dict:
         h, w = frame.shape[:2]
         analyzer = get_analyzer(room)
         pose_kps = None
+        spine_kps = None  # SpinePose'dan gelen omurga noktaları
         schroth_data = None
 
         pm = get_pose_model()
         if pm:
-            results = pm(frame, verbose=False)
-            if results and results[0].keypoints is not None:
-                kps_all = results[0].keypoints.data.cpu().numpy()
-                if len(kps_all) > 0:
-                    if len(kps_all) > 1 and results[0].boxes is not None:
-                        boxes = results[0].boxes.xyxy.cpu().numpy()
-                        areas = [(b[2]-b[0])*(b[3]-b[1]) for b in boxes]
-                        pose_kps = kps_all[int(np.argmax(areas))]
-                    else:
-                        pose_kps = kps_all[0]
-                    if analyzer:
-                        schroth_data = analyzer.analyze(pose_kps, w, h)
+            # SpinePose mı yoksa YOLO mu?
+            if _use_spinepose:
+                # SpinePose API: estimator(image) → (keypoints, scores)
+                # keypoints shape: (N, 37, 2) — N kişi
+                # scores shape: (N, 37)
+                try:
+                    keypoints, scores = pm(frame)
+                    if keypoints is not None and len(keypoints) > 0:
+                        # En büyük kişiyi seç (eğer birden çok varsa)
+                        if len(keypoints) > 1:
+                            # Bounding box alanlarına göre değil, keypoint yayılımına göre
+                            spreads = [
+                                (kp[:, 0].max() - kp[:, 0].min()) *
+                                (kp[:, 1].max() - kp[:, 1].min())
+                                for kp in keypoints
+                            ]
+                            idx = int(np.argmax(spreads))
+                        else:
+                            idx = 0
+
+                        kps_full = keypoints[idx]   # (37, 2)
+                        scs_full = scores[idx]      # (37,)
+
+                        # SpinePose 37 keypoint düzeni:
+                        # 0-16: COCO body (17 nokta) — Schroth analyzer ile uyumlu
+                        # 17-25: Spine (9 nokta) — yeni: omurga eğriliği için
+                        # 26-36: Ek noktalar (foot, head)
+
+                        # COCO 17 keypoint formatına çevir: (17, 3) — [x, y, conf]
+                        pose_kps = np.zeros((17, 3), dtype=np.float32)
+                        pose_kps[:, 0] = kps_full[:17, 0]
+                        pose_kps[:, 1] = kps_full[:17, 1]
+                        pose_kps[:, 2] = scs_full[:17]
+
+                        # Spine keypoints (9 nokta) — Schroth için ek bilgi
+                        spine_kps = np.zeros((9, 3), dtype=np.float32)
+                        if kps_full.shape[0] >= 26:  # 17 body + 9 spine
+                            spine_kps[:, 0] = kps_full[17:26, 0]
+                            spine_kps[:, 1] = kps_full[17:26, 1]
+                            spine_kps[:, 2] = scs_full[17:26]
+
+                        if analyzer:
+                            schroth_data = analyzer.analyze(pose_kps, w, h, spine_kps)
+                except Exception as e:
+                    logger.error(f"SpinePose inference error: {e}")
+            else:
+                # YOLO API
+                results = pm(frame, verbose=False)
+                if results and results[0].keypoints is not None:
+                    kps_all = results[0].keypoints.data.cpu().numpy()
+                    if len(kps_all) > 0:
+                        if len(kps_all) > 1 and results[0].boxes is not None:
+                            boxes = results[0].boxes.xyxy.cpu().numpy()
+                            areas = [(b[2]-b[0])*(b[3]-b[1]) for b in boxes]
+                            pose_kps = kps_all[int(np.argmax(areas))]
+                        else:
+                            pose_kps = kps_all[0]
+                        if analyzer:
+                            schroth_data = analyzer.analyze(pose_kps, w, h)
         else:
             if analyzer:
                 schroth_data = _mock_schroth(analyzer, np)
