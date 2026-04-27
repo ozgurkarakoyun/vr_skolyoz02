@@ -96,6 +96,7 @@ class PostureMetrics:
     hip_angle: float = 0.0            # Kalça eğimi (+ = sol yüksek)
     trunk_inclination: float = 0.0    # Gövde eğimi (lateral)
     cobb_proxy: float = 0.0           # Tahmini Cobb açısı (2D proxy)
+    cobb_source: str = 'estimated'    # 'spine' (gerçek omurga) veya 'estimated' (omuz/kalça)
     pelvic_tilt: float = 0.0          # Pelvik tilt
 
     # Pozisyonlar
@@ -149,19 +150,24 @@ class SchrothAnalyzer:
 
     # ─── Public API ──────────────────────────────────────────
 
-    def analyze(self, keypoints_raw: np.ndarray, frame_width: int = 640, frame_height: int = 480) -> Optional[dict]:
+    def analyze(self, keypoints_raw: np.ndarray, frame_width: int = 640,
+                frame_height: int = 480, spine_kps: Optional[np.ndarray] = None) -> Optional[dict]:
         """
         Ana analiz fonksiyonu.
-        keypoints_raw: shape (17, 3) — [x, y, conf]
+        keypoints_raw: shape (17, 3) — COCO body [x, y, conf]
+        spine_kps:     shape (9, 3) — opsiyonel SpinePose omurga noktaları
+                       (Cobb proxy daha doğru hesaplanır)
         """
         self.session.frame_count += 1
 
         kps = self._extract_keypoints(keypoints_raw)
         if not self._validate_keypoints(kps):
-            # Geçersiz frame — son geçerli sonucu döndür
             return self._last_valid_dict()
 
         self.session.valid_detections += 1
+
+        # Spine keypoints'i sakla (Cobb hesabı için)
+        self._spine_kps = spine_kps
 
         metrics = PostureMetrics()
         metrics.body_width_px = max(
@@ -311,10 +317,16 @@ class SchrothAnalyzer:
         trunk_dx = sc_x - hc_x
         m.trunk_inclination = float(np.degrees(np.arctan2(trunk_dx, trunk_dy)))
 
-        # Cobb açısı 2D proxy
-        # Omuz eğimi + kalça eğimi toplamının mutlak değeri
-        # (gerçek Cobb değil, rölatif gösterge)
-        m.cobb_proxy = abs(m.shoulder_angle) + abs(m.hip_angle) * 0.7
+        # Cobb açısı proxy hesabı
+        # SpinePose 9 omurga noktası varsa gerçek omurga eğriliğinden hesapla
+        spine = getattr(self, '_spine_kps', None)
+        if spine is not None and len(spine) >= 5:
+            m.cobb_proxy = self._compute_cobb_from_spine(spine)
+            m.cobb_source = 'spine'  # gerçek omurga noktalarından
+        else:
+            # Yedek: omuz + kalça açılarından kaba tahmin
+            m.cobb_proxy = abs(m.shoulder_angle) + abs(m.hip_angle) * 0.7
+            m.cobb_source = 'estimated'
 
         # Dirsek ve diz bilgileri varsa ek analiz
         if kps.left_knee is not None and kps.right_knee is not None:
@@ -323,9 +335,50 @@ class SchrothAnalyzer:
             k_dy = float(lk[1]) - float(rk[1])
             k_dx = abs(float(rk[0]) - float(lk[0])) or 1
             knee_angle = float(np.degrees(np.arctan2(k_dy, k_dx)))
-            # Diz eğimi pelvik tilti destekliyorsa notla
             if abs(knee_angle) > 2:
                 m.pelvic_tilt = (m.pelvic_tilt + knee_angle) / 2
+
+    def _compute_cobb_from_spine(self, spine_kps: np.ndarray) -> float:
+        """
+        SpinePose 9 omurga noktasından 2D Cobb proxy hesapla.
+
+        Mantık: Üst omurga ve alt omurga eğimleri arasındaki açı.
+        Üst 3 nokta (cervical-thoracic) ve alt 3 nokta (lumbar) arası segment
+        eğimleri hesaplanır, aralarındaki açı Cobb proxy olur.
+
+        spine_kps shape: (9, 3) — [x, y, conf]
+        İndeksler genel olarak yukarıdan aşağı: 0=üst (boyun), 8=alt (sakrum)
+        """
+        # Düşük güvenli noktaları filtrele
+        valid_mask = spine_kps[:, 2] >= 0.3
+        valid_pts = spine_kps[valid_mask]
+        if len(valid_pts) < 5:
+            # Yetersiz nokta — fallback
+            return 0.0
+
+        # Y'ye göre sırala (yukarıdan aşağı)
+        sorted_idx = np.argsort(valid_pts[:, 1])
+        pts = valid_pts[sorted_idx]
+        n = len(pts)
+
+        # Üst 1/3 ve alt 1/3 segmentlerinin eğimlerini hesapla
+        upper = pts[:max(2, n // 3)]
+        lower = pts[-max(2, n // 3):]
+
+        def _slope(seg):
+            # Lineer regresyon eğimi (dy / dx)
+            xs = seg[:, 0]
+            ys = seg[:, 1]
+            dx = xs[-1] - xs[0]
+            dy = ys[-1] - ys[0]
+            return float(np.degrees(np.arctan2(dx, dy or 1)))
+
+        upper_angle = _slope(upper)
+        lower_angle = _slope(lower)
+
+        # Cobb proxy: iki segment arasındaki açı
+        cobb = abs(upper_angle - lower_angle)
+        return min(cobb, 90.0)  # 90°+ değerleri sınırla
 
     # ─── Temporal Smoothing ──────────────────────────────────
 
@@ -508,6 +561,7 @@ class SchrothAnalyzer:
             'hip_angle': round(m.hip_angle, 1),
             'trunk_inclination': round(m.trunk_inclination, 1),
             'cobb_proxy': round(m.cobb_proxy, 1),
+            'cobb_source': m.cobb_source,
             'pelvic_tilt': round(m.pelvic_tilt, 1),
             'lateral_shift_px': round(m.lateral_shift_px, 1),
             'lateral_shift_pct': round(m.lateral_shift_pct, 1),
@@ -547,7 +601,25 @@ class SchrothAnalyzer:
 
             # Sırta dönük mü? (UI için bilgi)
             'is_back_facing': getattr(self, '_is_back_facing', False),
+
+            # SpinePose 9 omurga noktası (varsa)
+            'spine_keypoints': self._spine_kps_to_list(),
         }
+
+    def _spine_kps_to_list(self):
+        """Spine keypoints'i JSON-uyumlu listeye çevir"""
+        sp = getattr(self, '_spine_kps', None)
+        if sp is None:
+            return None
+        result = []
+        for pt in sp:
+            if float(pt[2]) >= 0.3:
+                result.append([round(float(pt[0]), 1),
+                              round(float(pt[1]), 1),
+                              round(float(pt[2]), 3)])
+            else:
+                result.append(None)
+        return result
 
     def _last_valid_dict(self):
         return self._last_valid
