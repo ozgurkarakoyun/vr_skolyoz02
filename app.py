@@ -120,7 +120,7 @@ def get_pose_model():
                 *a, **{**kw, 'weights_only': False}
             )
 
-            path = os.environ.get('MODEL_PATH', 'models/yolo26n-pose.pt')
+            path = os.environ.get('MODEL_PATH', 'models/yolov8n-pose.pt')
             if not os.path.exists(path):
                 logger.warning(f"Pose model bulunamadı: {path}")
                 return None
