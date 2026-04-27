@@ -208,6 +208,28 @@ class SchrothAnalyzer:
 
     # ─── Keypoint Extraction ─────────────────────────────────
 
+    def _detect_back_facing(self, kps_raw: np.ndarray) -> bool:
+        """
+        Hasta sırtını döndü mü tespit et.
+
+        Sırt görüntüsünde yüz keypoint'leri (burun, gözler) düşük güvenle gelir
+        veya hiç gelmez. Eğer yüz keypoint'lerinin ortalama güveni düşükse,
+        kişi sırtını dönmüş demektir.
+        """
+        face_indices = [KP['nose'], KP['left_eye'], KP['right_eye']]
+        face_confs = []
+        for idx in face_indices:
+            if idx < len(kps_raw):
+                face_confs.append(float(kps_raw[idx][2]))
+
+        if not face_confs:
+            return True  # hiç yoksa sırta dönük varsay
+
+        avg_face_conf = sum(face_confs) / len(face_confs)
+        # Eşik: yüz görünüyorsa bu ortalama 0.5+ olur
+        # Sırta dönükse 0.2-0.3 civarında veya hiç yok
+        return avg_face_conf < 0.35
+
     def _extract_keypoints(self, kps_raw: np.ndarray) -> KeypointSet:
         def get(idx: int) -> Optional[np.ndarray]:
             if idx >= len(kps_raw):
@@ -217,6 +239,26 @@ class SchrothAnalyzer:
                 return None
             return pt
 
+        # Sırta dönük tespit et — sol/sağ otomatik takas
+        is_back = self._detect_back_facing(kps_raw)
+        self._is_back_facing = is_back  # raporlamak için sakla
+
+        if is_back:
+            # Hasta sırtını dönmüş — kameranın "sol" gördüğü hastanın sağı
+            # YOLO'nun left_* keypoint'leri = hastanın anatomik right_* keypoint'leri
+            return KeypointSet(
+                left_shoulder=get(KP['right_shoulder']),  # ← takas
+                right_shoulder=get(KP['left_shoulder']),  # ← takas
+                left_hip=get(KP['right_hip']),            # ← takas
+                right_hip=get(KP['left_hip']),            # ← takas
+                left_knee=get(KP['right_knee']),          # ← takas
+                right_knee=get(KP['left_knee']),          # ← takas
+                left_ear=get(KP['right_ear']),
+                right_ear=get(KP['left_ear']),
+                nose=get(KP['nose']),
+            )
+
+        # Önden bakıyor — normal eşleme
         return KeypointSet(
             left_shoulder=get(KP['left_shoulder']),
             right_shoulder=get(KP['right_shoulder']),
@@ -502,6 +544,9 @@ class SchrothAnalyzer:
 
             # Seans özeti
             'session': self.get_session_summary(),
+
+            # Sırta dönük mü? (UI için bilgi)
+            'is_back_facing': getattr(self, '_is_back_facing', False),
         }
 
     def _last_valid_dict(self):
