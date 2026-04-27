@@ -1,0 +1,33 @@
+# ── Web framework ──────────────────────────────────────────
+flask==3.0.3
+flask-socketio==5.3.6
+python-socketio==5.11.3
+python-engineio==4.9.1
+gunicorn==22.0.0
+eventlet==0.36.1
+
+# ── OpenCV — SADECE headless ───────────────────────────────
+opencv-python-headless==4.9.0.80
+
+# ── Sayısal / görüntü ──────────────────────────────────────
+numpy==1.26.4
+Pillow==10.3.0
+
+# ── Ultralytics minimum bağımlılıkları ─────────────────────
+# ultralytics ana paketi Dockerfile'da --no-deps ile kurulur
+# (full opencv-python çekmesin diye)
+torch>=2.0.0
+torchvision
+matplotlib>=3.3.0
+pandas>=1.1.4
+psutil
+pyyaml>=5.3.1
+requests>=2.23.0
+scipy>=1.4.1
+seaborn>=0.11.0
+tqdm>=4.64.0
+# NOT: lapx kaldırıldı — C++ derleyici gerektiriyor
+# Tracking kullanılmıyor, gerek yok
+
+# ── PDF ────────────────────────────────────────────────────
+reportlab==4.2.0
