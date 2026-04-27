@@ -263,6 +263,30 @@ function drawOverlay(kps, a, scolPoints) {
   const line=(a,b,c,w,d=false)=>{if(!a||!b)return;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=c;ctx.lineWidth=w;ctx.setLineDash(d?[6,4]:[]);ctx.stroke();ctx.setLineDash([]);};
   const mid=(a,b)=>a&&b?[(a[0]+b[0])/2,(a[1]+b[1])/2]:null;
 
+  // ── Bounding Box (anatomik referans çerçeve) ──
+  if(a.person_bbox){
+    const [bx1,by1,bx2,by2]=a.person_bbox;
+    const sbx1=bx1*sx, sby1=by1*sy, sbx2=bx2*sx, sby2=by2*sy;
+    ctx.strokeStyle='rgba(0,229,255,.35)';
+    ctx.lineWidth=1.5;
+    ctx.setLineDash([8,5]);
+    ctx.strokeRect(sbx1, sby1, sbx2-sbx1, sby2-sby1);
+    ctx.setLineDash([]);
+    // BBOX köşe işaretleri
+    const cs=10; // corner size
+    ctx.strokeStyle='rgba(0,229,255,.7)';
+    ctx.lineWidth=2;
+    [[sbx1,sby1,1,1],[sbx2,sby1,-1,1],[sbx1,sby2,1,-1],[sbx2,sby2,-1,-1]].forEach(([x,y,dx,dy])=>{
+      ctx.beginPath();
+      ctx.moveTo(x+dx*cs, y); ctx.lineTo(x, y); ctx.lineTo(x, y+dy*cs);
+      ctx.stroke();
+    });
+    // Etiket
+    ctx.fillStyle='rgba(0,229,255,.7)';
+    ctx.font='10px monospace';
+    ctx.fillText('GÖVDE', sbx1+4, sby1-4);
+  }
+
   // Schroth pose overlay
   const ls=toC(kps.left_shoulder),rs=toC(kps.right_shoulder),lh=toC(kps.left_hip),rh=toC(kps.right_hip);
   const lk=toC(kps.left_knee),rk=toC(kps.right_knee);
