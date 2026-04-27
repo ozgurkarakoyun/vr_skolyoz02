@@ -2,41 +2,45 @@
 download_models.py
 ──────────────────────────────────────────────────
 Railway deploy sırasında çalıştırılır.
-YOLO26n-pose modelini önceden indirir,
-soğuk başlatma gecikmesini ortadan kaldırır.
+yolov8n-pose.pt modelini Ultralytics resmi GitHub'dan indirir.
 """
 import os
 import sys
+import urllib.request
+
+POSE_URL = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n-pose.pt"
 
 def download_pose_model():
-    model_dir = "models"
-    os.makedirs(model_dir, exist_ok=True)
+    pose_path = os.environ.get('MODEL_PATH', 'models/yolov8n-pose.pt')
+    scol_path = os.environ.get('SCOL_MODEL_PATH', 'models/model_point4.pt')
 
-    pose_path = os.environ.get('MODEL_PATH', os.path.join(model_dir, 'yolo26n-pose.pt'))
-    scol_path = os.environ.get('SCOL_MODEL_PATH', os.path.join(model_dir, "model_point4.pt"))
+    # Klasör oluştur
+    pose_dir = os.path.dirname(pose_path)
+    if pose_dir:
+        os.makedirs(pose_dir, exist_ok=True)
 
-    print("[MODEL] Pose model kontrol ediliyor...")
-    if not os.path.exists(pose_path):
+    # Pose model
+    print(f"[MODEL] Pose model kontrol: {pose_path}")
+    if os.path.exists(pose_path):
+        size_mb = os.path.getsize(pose_path) / 1024 / 1024
+        print(f"[MODEL] ✅ Zaten mevcut: {pose_path} ({size_mb:.1f} MB)")
+    else:
         try:
-            from ultralytics import YOLO
-            model_name = os.path.basename(pose_path)
-            print(f"[MODEL] {model_name} indiriliyor...")
-            model = YOLO(model_name)
-            import shutil
-            downloaded = model_name
-            if os.path.exists(downloaded):
-                shutil.move(downloaded, pose_path)
-            print(f"[MODEL] ✅ Pose model hazır: {pose_path}")
+            print(f"[MODEL] İndiriliyor: {POSE_URL}")
+            urllib.request.urlretrieve(POSE_URL, pose_path)
+            size_mb = os.path.getsize(pose_path) / 1024 / 1024
+            print(f"[MODEL] ✅ İndirildi: {pose_path} ({size_mb:.1f} MB)")
         except Exception as e:
             print(f"[MODEL] ⚠ Pose model indirilemedi: {e}", file=sys.stderr)
-    else:
-        print(f"[MODEL] ✅ Pose model zaten mevcut: {pose_path}")
 
+    # Skolyoz model
+    print(f"[MODEL] Skolyoz model kontrol: {scol_path}")
     if os.path.exists(scol_path):
-        print(f"[MODEL] ✅ Skolyoz model mevcut: {scol_path}")
+        size_mb = os.path.getsize(scol_path) / 1024 / 1024
+        print(f"[MODEL] ✅ Mevcut: {scol_path} ({size_mb:.1f} MB)")
     else:
         print(f"[MODEL] ℹ Skolyoz model bulunamadı: {scol_path}")
-        print("[MODEL] ℹ Pose keypoint tahmini kullanılacak")
+        print("[MODEL] ℹ Pose keypoint tahmini fallback kullanılacak")
 
 if __name__ == "__main__":
     download_pose_model()
