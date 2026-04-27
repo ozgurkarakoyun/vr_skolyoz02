@@ -85,6 +85,7 @@
   </div>
 
   <div class="feed-area">
+    <img id="videoFeed" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000" alt="Telefon görüntüsü">
     <div class="no-feed" id="noFeed">
       <div class="icon">📱</div>
       <p>Telefon bağlantısı bekleniyor...<br>Aynı Seans ID ile telefonu açın.</p>
@@ -183,9 +184,16 @@ function initSocket() {
   socket.on('analysis', d => {
     latestAnalysis=d.analysis;
     updateNormalUI(d.analysis);
+    // Telefon kamerasının görüntüsünü ekrana yansıt
+    if(d.image){
+      const img = document.getElementById('videoFeed');
+      const src = d.image.startsWith('data:') ? d.image : 'data:image/jpeg;base64,'+d.image;
+      img.src = src;
+      img.style.display = 'block';
+    }
     if(!hasFeed&&d.analysis){ hasFeed=true; document.getElementById('noFeed').style.display='none'; document.getElementById('infoOverlay').style.display='block'; document.getElementById('vrBtn').disabled=false; }
   });
-  socket.on('session_reset', () => { hasFeed=false; document.getElementById('noFeed').style.display='flex'; document.getElementById('infoOverlay').style.display='none'; document.getElementById('vrBtn').disabled=true; });
+  socket.on('session_reset', () => { hasFeed=false; document.getElementById('noFeed').style.display='flex'; document.getElementById('infoOverlay').style.display='none'; document.getElementById('vrBtn').disabled=true; document.getElementById('videoFeed').style.display='none'; });
 }
 
 function resetSession() { if(socket?.connected) socket.emit('reset_session',{room:SESSION}); }
