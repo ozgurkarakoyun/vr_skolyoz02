@@ -97,6 +97,7 @@
   <div class="fl-curve"><div class="fl-curve-lbl">EĞRİ TİPİ</div><div class="fl-curve-type" id="curveType">—</div></div>
   <div class="fl-score"><div class="fl-score-num" id="scoreNum">—</div><div class="fl-score-lbl">SKOR</div></div>
   <div class="fl-mock" id="mockBadge">⚠ DEMO</div>
+  <div id="backFacingBadge" style="display:none;position:absolute;top:14px;left:14px;background:rgba(46,213,115,.18);border:1px solid rgba(46,213,115,.4);color:#2ed573;padding:5px 10px;border-radius:7px;font-size:10px;font-family:'DM Mono',monospace;letter-spacing:1px">🔄 SIRT GÖRÜNÜMÜ</div>
   <div class="phase-bar-wrap">
     <div class="phase-label"><span id="phaseName">—</span><span id="phaseTimer">—s</span></div>
     <div class="phase-bar-bg"><div class="phase-bar-fill" id="phaseBar"></div></div>
@@ -204,6 +205,7 @@ function updateUI(a) {
   se.style.color=score>=80?'#2ed573':score>=55?'#ffa502':'#ff4757';
   document.getElementById('curveType').textContent=a.curve_type||'—';
   document.getElementById('mockBadge').style.display=a.mock?'block':'none';
+  document.getElementById('backFacingBadge').style.display=a.is_back_facing?'block':'none';
 
   // Schroth metrikler
   document.getElementById('mOmuz').textContent=(a.shoulder_angle||0).toFixed(1)+'°';
