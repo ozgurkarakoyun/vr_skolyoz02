@@ -16,26 +16,26 @@ COPY requirements.txt constraints.txt ./
 # 1. NumPy önce ve sabit
 RUN pip install --no-cache-dir numpy==1.26.4
 
-# 2. Headless opencv
-RUN pip install --no-cache-dir opencv-python-headless==4.9.0.80
-
-# 3. PyTorch — numpy 1.26 ile uyumlu sürüm
+# 2. PyTorch — numpy 1.26 ile uyumlu sürüm
 RUN pip install --no-cache-dir "torch>=2.0,<2.5" "torchvision<0.20"
 
-# 4. Diğer bağımlılıklar
+# 3. Diğer bağımlılıklar
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. cpuinfo
+# 4. cpuinfo
 RUN pip install --no-cache-dir py-cpuinfo
 
-# 6. Ultralytics (yedek pose model için)
+# 5. Ultralytics (yedek pose model için)
 RUN pip install --no-cache-dir ultralytics==8.3.40 --no-deps
 
-# 7. SpinePose — ana pose modeli (sırta dönük çalışır + 9 omurga noktası)
+# 6. SpinePose
 RUN pip install --no-cache-dir spinepose
 
-# 8. Full opencv geldiyse temizle
-RUN pip uninstall -y opencv-python || true
+# 7. KRİTİK: Eğer ultralytics/spinepose full opencv kurmuşsa kaldır
+RUN pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true
+
+# 8. SADECE headless'i tekrar kur
+RUN pip install --no-cache-dir opencv-python-headless==4.9.0.80
 
 # 9. Doğrula
 RUN python -c "import numpy; print('[OK] numpy', numpy.__version__)"
