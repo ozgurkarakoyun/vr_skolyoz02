@@ -122,7 +122,7 @@ def get_analyzer(room: str):
     if not ANALYZER_OK:
         return None
     if room not in _analyzers:
-        _analyzers[room] = SchrothAnalyzer(smoothing_window=5)
+        _analyzers[room] = SchrothAnalyzer()
     return _analyzers[room]
 
 # ─── Frame işleme ────────────────────────────────────────────
