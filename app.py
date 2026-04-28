@@ -155,62 +155,116 @@ def process_frame(image_b64: str, room: str) -> dict:
         if marker_data is None:
             return {}
 
-        # ─── Schroth analyzer ile entegre — skor + faz hesabı ──
-        analyzer = get_analyzer(room)
-        schroth_data = {}
-        if analyzer and marker_data.get('status') == 'ok':
-            # Marker engine'den gelen verileri schroth analyzer'a uygun formata çevir
-            anatomy = marker_data['anatomy']
-            # Sahte 17-COCO keypoint oluştur (analyzer compat için)
-            # Marker'lardan elde ettiğimiz değerleri ata
-            pose_kps = np.zeros((17, 3), dtype=np.float32)
-            # COCO indeks 5=l_shoulder, 6=r_shoulder, 11=l_hip, 12=r_hip
-            pose_kps[5] = [anatomy['left_acromion'][0], anatomy['left_acromion'][1], 1.0]
-            pose_kps[6] = [anatomy['right_acromion'][0], anatomy['right_acromion'][1], 1.0]
-            pose_kps[11] = [anatomy['left_psis'][0], anatomy['left_psis'][1], 1.0]
-            pose_kps[12] = [anatomy['right_psis'][0], anatomy['right_psis'][1], 1.0]
-            # Yüz keypointleri (sırta dönük varsayımıyla 0)
-            pose_kps[0] = [(anatomy['left_acromion'][0]+anatomy['right_acromion'][0])/2,
-                           anatomy['t1'][1] - 30, 0.1]  # düşük güven
-
-            try:
-                schroth_data = analyzer.analyze(pose_kps, w, h) or {}
-            except Exception as e:
-                logger.error(f"Analyzer error: {e}")
-
-        # ─── Sonucu birleştir ─────────────────────────────────
-        combined = {}
-        combined.update(schroth_data)
-
-        # Marker engine sonuçlarını ekle (Cobb açıları, anatomik konumlar)
-        # Bu marker engine değerleri schroth analyzer değerlerini OVERRIDE eder
-        # çünkü gerçek anatomik noktalardan hesaplandı
-        combined['marker'] = {
-            'status': marker_data.get('status'),
-            'detected_markers': marker_data.get('detected_markers', 0),
-            'required_markers': marker_data.get('required_markers', 9),
+        # ─── Sonuç sözlüğü ────────────────────────────────────
+        combined = {
+            'marker': {
+                'status': marker_data.get('status'),
+                'detected_markers': marker_data.get('detected_markers', 0),
+                'required_markers': marker_data.get('required_markers', 9),
+            },
+            'frame_count': 0,
+            'is_back_facing': True,  # Schroth her zaman sırta dönük
         }
 
-        if marker_data.get('status') == 'ok':
-            # Marker engine'in hesapladığı GERÇEK Cobb açıları
-            combined['scoliosis'] = {
-                'thoracic':      marker_data['angles']['thoracic'],
-                'thoracolumbar': marker_data['angles']['thoracolumbar'],
-                'lumbar':        marker_data['angles']['lumbar'],
-                'labels':        marker_data['labels'],
-                'severity':      marker_data['severity'],
-                'max_angle':     marker_data['max_angle'],
-                'cobb_source':   'marker',  # gerçek anatomik markerlardan
-            }
-            # Klinik metrikler (marker'lardan)
-            combined['shoulder_angle'] = marker_data['shoulder_angle']
-            combined['pelvic_tilt'] = marker_data['pelvic_tilt']
-            combined['lateral_shift_px'] = marker_data['lateral_shift_px']
-            combined['lateral_shift_pct'] = marker_data['lateral_shift_pct']
-            combined['curve_type'] = marker_data['curve_type']
-            combined['dominant_curve'] = marker_data['dominant_curve']
-            combined['rab_side'] = marker_data['rab_side']
-            combined['anatomy'] = marker_data['anatomy']
+        if marker_data.get('status') != 'ok':
+            # Yetersiz marker — UI'a "marker bekleniyor" göster
+            combined['score'] = 0
+            combined['curve_type'] = '—'
+            combined['shoulder_angle'] = 0
+            combined['hip_angle'] = 0
+            combined['trunk_inclination'] = 0
+            combined['lateral_shift_pct'] = 0
+            combined['cobb_proxy'] = 0
+            combined['cobb_source'] = 'none'
+            return combined
+
+        # ─── Marker tespit başarılı — DOĞRUDAN KULLAN ─────────
+        # Schroth analyzer'a gönderme — gereksiz validate ve cache fail oluyor
+        # Marker engine zaten her şeyi hesaplamış durumda
+
+        # Klinik metrikler (marker engine'den DOĞRUDAN)
+        combined['shoulder_angle']     = marker_data['shoulder_angle']
+        combined['hip_angle']          = marker_data['pelvic_tilt']  # PSIS açısı = kalça hizası
+        combined['pelvic_tilt']        = marker_data['pelvic_tilt']
+        combined['lateral_shift_px']   = marker_data['lateral_shift_px']
+        combined['lateral_shift_pct']  = marker_data['lateral_shift_pct']
+        combined['curve_type']         = marker_data['curve_type']
+        combined['dominant_curve']     = marker_data['dominant_curve']
+        combined['rab_side']           = marker_data['rab_side']
+        combined['anatomy']            = marker_data['anatomy']
+
+        # Cobb değerleri
+        combined['scoliosis'] = {
+            'thoracic':      marker_data['angles']['thoracic'],
+            'thoracolumbar': marker_data['angles']['thoracolumbar'],
+            'lumbar':        marker_data['angles']['lumbar'],
+            'labels':        marker_data['labels'],
+            'severity':      marker_data['severity'],
+            'max_angle':     marker_data['max_angle'],
+            'cobb_source':   'marker',
+        }
+        # Cobb proxy = en büyük açı (UI uyumluluğu için)
+        combined['cobb_proxy']  = marker_data['max_angle']
+        combined['cobb_source'] = 'marker'
+
+        # ─── Trunk inclination (gövde eğimi) ──────────────────
+        # T1 ile L5 arası dikey çizginin sapmasi
+        anatomy = marker_data['anatomy']
+        t1 = anatomy['t1']
+        l5 = anatomy['l5']
+        import math
+        dx = t1[0] - l5[0]
+        dy = abs(t1[1] - l5[1]) or 1
+        trunk_incl = math.degrees(math.atan2(dx, dy))
+        combined['trunk_inclination'] = round(trunk_incl, 1)
+
+        # ─── Schroth Skor (basit) ─────────────────────────────
+        # Marker'lardan basit skor: max açı düşükse skor yüksek
+        max_cobb = marker_data['max_angle']
+        # 0° → 100 puan, 30°+ → 50 puan, 50°+ → 0 puan
+        if max_cobb < 5:
+            score = 100
+        elif max_cobb < 10:
+            score = 90
+        elif max_cobb < 15:
+            score = 80
+        elif max_cobb < 25:
+            score = 70 - (max_cobb - 15)
+        elif max_cobb < 40:
+            score = 60 - (max_cobb - 25) * 2
+        else:
+            score = max(0, 30 - (max_cobb - 40))
+        # Pelvik kayma cezası
+        score -= abs(marker_data['lateral_shift_pct']) * 0.5
+        combined['score'] = max(0, min(100, int(score)))
+
+        # ─── Faz takibi (Schroth analyzer ile ayrıca) ─────────
+        # Sadece phase + session bilgisi için analyzer kullan
+        analyzer = get_analyzer(room)
+        if analyzer:
+            try:
+                # Sahte minimum keypoint - sadece validate geçsin
+                pose_kps = np.zeros((17, 3), dtype=np.float32)
+                pose_kps[5]  = [anatomy['left_acromion'][0],  anatomy['left_acromion'][1],  1.0]
+                pose_kps[6]  = [anatomy['right_acromion'][0], anatomy['right_acromion'][1], 1.0]
+                pose_kps[11] = [anatomy['left_psis'][0],      anatomy['left_psis'][1],      1.0]
+                pose_kps[12] = [anatomy['right_psis'][0],     anatomy['right_psis'][1],     1.0]
+
+                # Sırta dönük flip yapmasın diye yüz keypointleri YÜKSEK güvenli yap
+                # (analyzer sırta dönük varsayıp L/R takas yapmasın)
+                pose_kps[0] = [(anatomy['left_acromion'][0]+anatomy['right_acromion'][0])/2,
+                               anatomy['t1'][1] - 30, 0.9]
+                pose_kps[1] = [pose_kps[0,0]-5, pose_kps[0,1], 0.9]
+                pose_kps[2] = [pose_kps[0,0]+5, pose_kps[0,1], 0.9]
+
+                schroth_result = analyzer.analyze(pose_kps, w, h) or {}
+                # Sadece phase ve session bilgilerini al, açıları DEĞİŞTİRME
+                if schroth_result:
+                    combined['phase']       = schroth_result.get('phase')
+                    combined['session']     = schroth_result.get('session')
+                    combined['frame_count'] = analyzer.session.frame_count
+            except Exception as e:
+                logger.error(f"Phase tracker error: {e}")
 
         return combined
 
