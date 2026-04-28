@@ -22,7 +22,7 @@
 
   /* Camera */
   .camera-wrap{position:relative;flex:1;overflow:hidden;background:#000;min-height:0}
-  video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  video{width:100%;height:100%;object-fit:cover;background:#000}
   canvas#overlayCanvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 
   /* Floating */
@@ -256,8 +256,28 @@ function drawOverlay(kps, a, scolPoints) {
   canvas.width=vd.clientWidth; canvas.height=vd.clientHeight;
   const ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  const sx=canvas.width/vd.videoWidth, sy=canvas.height/vd.videoHeight;
-  const toC=pt=>pt?[pt[0]*sx,pt[1]*sy]:null;
+
+  // ── object-fit: cover hesabı ──────────────────────────────
+  // Video oranı vs ekran oranı farklıysa, video kırpılır.
+  // Overlay koordinatları bu kırpmaya göre ayarlanmalı.
+  const vw=vd.videoWidth, vh=vd.videoHeight;
+  const cw=canvas.width, ch=canvas.height;
+  const videoAspect=vw/vh, screenAspect=cw/ch;
+
+  let scale, offsetX=0, offsetY=0;
+  if(videoAspect > screenAspect){
+    // Video daha geniş — yüksekliğe göre ölçekle, yanları kırpılır
+    scale = ch / vh;
+    offsetX = (cw - vw*scale) / 2;
+  } else {
+    // Video daha dar — genişliğe göre ölçekle, üst/alt kırpılır
+    scale = cw / vw;
+    offsetY = (ch - vh*scale) / 2;
+  }
+  const tx = x => x*scale + offsetX;
+  const ty = y => y*scale + offsetY;
+
+  const toC=pt=>pt?[tx(pt[0]),ty(pt[1])]:null;
   const score=a.score||0;
   const col=score>=80?'#2ed573':score>=55?'#ffa502':'#ff4757';
   const line=(a,b,c,w,d=false)=>{if(!a||!b)return;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=c;ctx.lineWidth=w;ctx.setLineDash(d?[6,4]:[]);ctx.stroke();ctx.setLineDash([]);};
@@ -268,7 +288,7 @@ function drawOverlay(kps, a, scolPoints) {
   // ── 9 ANATOMİK MARKER ─────────────────────────────────────
   if(a.anatomy){
     const ana = a.anatomy;
-    const toAna = name => ana[name] ? [ana[name][0]*sx, ana[name][1]*sy] : null;
+    const toAna = name => ana[name] ? [tx(ana[name][0]), ty(ana[name][1])] : null;
 
     const t1 = toAna('t1');
     const ra = toAna('right_acromion');
