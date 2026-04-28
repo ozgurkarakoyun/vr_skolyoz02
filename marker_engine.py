@@ -28,7 +28,6 @@ import numpy as np
 import base64
 import logging
 import os
-import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -215,16 +214,9 @@ def analyze_markers(frame):
     if model is None:
         return None
 
-    tmp_path = None
     try:
-        # Geçici dosya
-        tmp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
-        tmp_path = tmp_file.name
-        tmp_file.close()
-        cv2.imwrite(tmp_path, frame)
-
-        # Model inference
-        results = model(tmp_path, verbose=False)
+        # Doğrudan numpy array ile inference (disk I/O yok, daha hızlı + fresh)
+        results = model(frame, verbose=False)
         all_points = []
         for r in results:
             if r.boxes is None:
@@ -424,9 +416,3 @@ def analyze_markers(frame):
     except Exception as e:
         logger.error(f"Marker analiz hatası: {e}", exc_info=True)
         return None
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
