@@ -207,6 +207,10 @@ def process_frame(image_b64: str, room: str) -> dict:
         combined['cobb_proxy']  = marker_data['max_angle']
         combined['cobb_source'] = 'marker'
 
+        # Marker engine'in çizdiği annotated görüntü (Quest için)
+        if marker_data.get('result_image_b64'):
+            combined['result_image_b64'] = marker_data['result_image_b64']
+
         # ─── Trunk inclination (gövde eğimi) ──────────────────
         # T1 ile L5 arası dikey çizginin sapmasi
         anatomy = marker_data['anatomy']
@@ -515,10 +519,16 @@ def on_frame(data):
         pid = _session_patients.get(room)
         if pid:
             analysis['patient_id'] = pid
-        # Hem analiz hem video frame'i Quest'e gönder
+
+        # Quest'e gönderilecek görüntü:
+        # Marker tespit edildiyse → çizimli versiyon (analizden gelen)
+        # Aksi halde → orijinal görüntü
+        annotated = analysis.pop('result_image_b64', None) if isinstance(analysis, dict) else None
+        display_image = annotated if annotated else image_b64
+
         emit('analysis', {
             'analysis': analysis,
-            'image': image_b64,  # Quest video gösterebilsin diye
+            'image': display_image,
             'timestamp': datetime.now().isoformat()
         }, to=room)
     except Exception as e:
