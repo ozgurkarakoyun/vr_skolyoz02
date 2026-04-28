@@ -238,31 +238,14 @@ def process_frame(image_b64: str, room: str) -> dict:
         score -= abs(marker_data['lateral_shift_pct']) * 0.5
         combined['score'] = max(0, min(100, int(score)))
 
-        # ─── Faz takibi (Schroth analyzer ile ayrıca) ─────────
-        # Sadece phase + session bilgisi için analyzer kullan
+        # ─── Faz takibi (basit API) ───────────────────────────
         analyzer = get_analyzer(room)
         if analyzer:
             try:
-                # Sahte minimum keypoint - sadece validate geçsin
-                pose_kps = np.zeros((17, 3), dtype=np.float32)
-                pose_kps[5]  = [anatomy['left_acromion'][0],  anatomy['left_acromion'][1],  1.0]
-                pose_kps[6]  = [anatomy['right_acromion'][0], anatomy['right_acromion'][1], 1.0]
-                pose_kps[11] = [anatomy['left_psis'][0],      anatomy['left_psis'][1],      1.0]
-                pose_kps[12] = [anatomy['right_psis'][0],     anatomy['right_psis'][1],     1.0]
-
-                # Sırta dönük flip yapmasın diye yüz keypointleri YÜKSEK güvenli yap
-                # (analyzer sırta dönük varsayıp L/R takas yapmasın)
-                pose_kps[0] = [(anatomy['left_acromion'][0]+anatomy['right_acromion'][0])/2,
-                               anatomy['t1'][1] - 30, 0.9]
-                pose_kps[1] = [pose_kps[0,0]-5, pose_kps[0,1], 0.9]
-                pose_kps[2] = [pose_kps[0,0]+5, pose_kps[0,1], 0.9]
-
-                schroth_result = analyzer.analyze(pose_kps, w, h) or {}
-                # Sadece phase ve session bilgilerini al, açıları DEĞİŞTİRME
-                if schroth_result:
-                    combined['phase']       = schroth_result.get('phase')
-                    combined['session']     = schroth_result.get('session')
-                    combined['frame_count'] = analyzer.session.frame_count
+                analyzer.tick(score=combined['score'], valid=True)
+                combined['phase']       = analyzer.get_current_phase()
+                combined['session']     = analyzer.get_session_summary()
+                combined['frame_count'] = analyzer.session.frame_count
             except Exception as e:
                 logger.error(f"Phase tracker error: {e}")
 
@@ -273,22 +256,6 @@ def process_frame(image_b64: str, room: str) -> dict:
         return {}
 
 
-def _mock_schroth(analyzer, np):
-    """Mock data — sadece test için"""
-    import time, math
-    t = time.time()
-    angle = math.sin(t * 0.3) * 6
-    mock_kps = np.array([
-        [320,50,0.9],[310,45,0.9],[330,45,0.9],[305,55,0.9],[335,55,0.9],
-        [280+angle,150,0.95],[360-angle,150+angle*2,0.95],
-        [260,220,0.8],[380,220,0.8],[250,280,0.7],[390,280,0.7],
-        [290+angle*.5,300+angle,0.9],[350-angle*.5,300-angle,0.9],
-        [290,380,0.8],[350,380,0.8],[290,450,0.7],[350,450,0.7],
-    ], dtype=np.float32)
-    r = analyzer.analyze(mock_kps, 640, 480)
-    if r:
-        r['mock'] = True
-    return r or {}
 
 
 # ─── Sayfa Route'ları ────────────────────────────────────────
