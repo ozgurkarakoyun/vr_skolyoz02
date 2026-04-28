@@ -151,7 +151,7 @@ def process_frame(image_b64: str, room: str) -> dict:
         if not MARKER_OK:
             return {'error': 'Marker engine yüklenemedi'}
 
-        marker_data = analyze_markers(frame)
+        marker_data = analyze_markers(frame, draw_overlay=False)
         if marker_data is None:
             return {}
 

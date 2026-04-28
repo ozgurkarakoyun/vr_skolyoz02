@@ -183,15 +183,36 @@ function stopStream() {
 
 function startFrameCapture() {
   const cv=document.createElement('canvas'), vd=document.getElementById('localVideo');
+  let pendingFrame = false;  // Backend meşgulse skip
+  const TARGET_WIDTH = 640;  // Backend'e gönderilecek max genişlik
+
+  // Backend cevabı geldikçe pending'i sıfırla
+  socket.on('analysis', () => { pendingFrame = false; });
+
   frameInterval = setInterval(() => {
-    if(!vd.videoWidth||!socket?.connected) return;
-    cv.width=vd.videoWidth; cv.height=vd.videoHeight;
-    cv.getContext('2d').drawImage(vd,0,0);
-    socket.emit('frame',{image:cv.toDataURL('image/jpeg',.7),room:SESSION});
+    if(!vd.videoWidth || !socket?.connected) return;
+    if(pendingFrame) return;  // ← önceki frame hâlâ işleniyor, atla
+
+    // Resize: 640px max genişlik, oran korunur
+    const scale = Math.min(1, TARGET_WIDTH / vd.videoWidth);
+    cv.width = Math.round(vd.videoWidth * scale);
+    cv.height = Math.round(vd.videoHeight * scale);
+    cv.getContext('2d').drawImage(vd, 0, 0, cv.width, cv.height);
+
+    pendingFrame = true;
+    socket.emit('frame', {
+      image: cv.toDataURL('image/jpeg', 0.5),  // 0.7 → 0.5 (daha küçük)
+      room: SESSION
+    });
+
     frameCount++;
-    const now=Date.now();
-    if(now-lastFpsTime>=1000){document.getElementById('fpsBadge').textContent=frameCount+' FPS';frameCount=0;lastFpsTime=now;}
-  }, 125);
+    const now = Date.now();
+    if(now - lastFpsTime >= 1000){
+      document.getElementById('fpsBadge').textContent = frameCount + ' FPS';
+      frameCount = 0;
+      lastFpsTime = now;
+    }
+  }, 100);  // 125ms → 100ms (10 FPS hedef)
 }
 
 function resetSession() { if(socket?.connected) socket.emit('reset_session',{room:SESSION}); }

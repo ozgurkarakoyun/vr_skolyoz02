@@ -86,6 +86,7 @@
 
   <div class="feed-area">
     <img id="videoFeed" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000" alt="Telefon görüntüsü">
+    <canvas id="overlayCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
     <div class="no-feed" id="noFeed">
       <div class="icon">📱</div>
       <p>Telefon bağlantısı bekleniyor...<br>Aynı Seans ID ile telefonu açın.</p>
@@ -190,10 +191,109 @@ function initSocket() {
       const src = d.image.startsWith('data:') ? d.image : 'data:image/jpeg;base64,'+d.image;
       img.src = src;
       img.style.display = 'block';
+      // Image yüklendiğinde overlay çiz
+      img.onload = () => drawQuestOverlay(d.analysis);
+    } else if(d.analysis) {
+      drawQuestOverlay(d.analysis);
     }
     if(!hasFeed&&d.analysis){ hasFeed=true; document.getElementById('noFeed').style.display='none'; document.getElementById('infoOverlay').style.display='block'; document.getElementById('vrBtn').disabled=false; }
   });
   socket.on('session_reset', () => { hasFeed=false; document.getElementById('noFeed').style.display='flex'; document.getElementById('infoOverlay').style.display='none'; document.getElementById('vrBtn').disabled=true; document.getElementById('videoFeed').style.display='none'; });
+}
+
+// ── Quest Overlay (telefon ile aynı çizimi yapar) ─────────────
+function drawQuestOverlay(a){
+  if(!a || !a.anatomy) return;
+  const canvas = document.getElementById('overlayCanvas');
+  const img = document.getElementById('videoFeed');
+  if(!img.naturalWidth) return;
+
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // object-fit: contain ölçek hesabı
+  const vw = img.naturalWidth, vh = img.naturalHeight;
+  const cw = canvas.width, ch = canvas.height;
+  const videoAspect = vw/vh, screenAspect = cw/ch;
+  let scale, ox = 0, oy = 0;
+  if(videoAspect > screenAspect){
+    scale = cw/vw; oy = (ch - vh*scale)/2;
+  } else {
+    scale = ch/vh; ox = (cw - vw*scale)/2;
+  }
+  const tx = x => x*scale + ox;
+  const ty = y => y*scale + oy;
+
+  const ana = a.anatomy;
+  const get = name => ana[name] ? [tx(ana[name][0]), ty(ana[name][1])] : null;
+
+  const t1 = get('t1'), ra = get('right_acromion'), la = get('left_acromion');
+  const tApex = get('t_apex'), tlApex = get('tl_apex'), lApex = get('l_apex');
+  const l5 = get('l5'), rPsis = get('right_psis'), lPsis = get('left_psis');
+
+  // Omurga hattı (sarı)
+  const spine = [t1, tApex, tlApex, lApex, l5].filter(Boolean);
+  if(spine.length >= 2){
+    ctx.beginPath();
+    ctx.moveTo(spine[0][0], spine[0][1]);
+    for(let i=1; i<spine.length; i++) ctx.lineTo(spine[i][0], spine[i][1]);
+    ctx.strokeStyle = '#ffd700';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+  // Omuz çizgisi
+  if(ra && la){
+    const ang = Math.abs(a.shoulder_angle||0);
+    const c = ang>5?'#ff4757':ang>2?'#ffa502':'#2ed573';
+    ctx.beginPath(); ctx.moveTo(ra[0],ra[1]); ctx.lineTo(la[0],la[1]);
+    ctx.strokeStyle = c; ctx.lineWidth = 3; ctx.stroke();
+  }
+  // PSIS çizgisi
+  if(rPsis && lPsis){
+    const ang = Math.abs(a.pelvic_tilt||0);
+    const c = ang>5?'#ff4757':ang>2?'#ffa502':'#2ed573';
+    ctx.beginPath(); ctx.moveTo(rPsis[0],rPsis[1]); ctx.lineTo(lPsis[0],lPsis[1]);
+    ctx.strokeStyle = c; ctx.lineWidth = 3; ctx.stroke();
+  }
+  // Marker noktaları
+  const markers = [
+    {pt: t1, color: '#00d4ff', label: 'T1'},
+    {pt: ra, color: '#ff5252', label: 'R-Akr'},
+    {pt: la, color: '#ff5252', label: 'L-Akr'},
+    {pt: tApex, color: '#ffd700', label: 'T-Apex'},
+    {pt: tlApex, color: '#ffd700', label: 'TL-Apex'},
+    {pt: lApex, color: '#ffd700', label: 'L-Apex'},
+    {pt: l5, color: '#00d4ff', label: 'L5'},
+    {pt: rPsis, color: '#2ed573', label: 'R-PSIS'},
+    {pt: lPsis, color: '#2ed573', label: 'L-PSIS'},
+  ];
+  markers.forEach(m => {
+    if(!m.pt) return;
+    ctx.beginPath(); ctx.arc(m.pt[0], m.pt[1], 7, 0, Math.PI*2);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.beginPath(); ctx.arc(m.pt[0], m.pt[1], 4, 0, Math.PI*2);
+    ctx.fillStyle = m.color; ctx.fill();
+    ctx.fillStyle = m.color;
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(m.label, m.pt[0]+10, m.pt[1]-6);
+  });
+  // Cobb açı etiketleri
+  if(a.scoliosis){
+    ctx.font = 'bold 12px monospace';
+    [
+      {pt: tApex, val: a.scoliosis.thoracic, lbl: 'T'},
+      {pt: tlApex, val: a.scoliosis.thoracolumbar, lbl: 'TL'},
+      {pt: lApex, val: a.scoliosis.lumbar, lbl: 'L'},
+    ].forEach(({pt, val, lbl}) => {
+      if(!pt) return;
+      const c = val>25?'#ff4757':val>10?'#ffa502':'#2ed573';
+      ctx.fillStyle = '#000'; ctx.fillRect(pt[0]+14, pt[1]-7, 70, 18);
+      ctx.fillStyle = c;
+      ctx.fillText(`${lbl}: ${val.toFixed(1)}°`, pt[0]+16, pt[1]+6);
+    });
+  }
 }
 
 function resetSession() { if(socket?.connected) socket.emit('reset_session',{room:SESSION}); }

@@ -205,18 +205,24 @@ def angle_color(angle):
 
 # ─── Schroth Analiz ─────────────────────────────────────────
 
-def analyze_markers(frame):
+def analyze_markers(frame, draw_overlay=False):
     """
     Frame üzerinde marker tespiti yap, anatomik atama yap,
     Schroth açılarını hesapla.
+
+    Args:
+        frame: numpy array (BGR)
+        draw_overlay: True ise annotated image de döndür (yavaş!)
+                      False (default) ise sadece koordinatlar (hızlı)
     """
     model = get_marker_model()
     if model is None:
         return None
 
     try:
-        # Doğrudan numpy array ile inference (disk I/O yok, daha hızlı + fresh)
-        results = model(frame, verbose=False)
+        # Hızlı inference: küçük input boyutu (320 px), low conf threshold
+        # imgsz=320: 640'a göre 4x hızlı, marker tespiti için yeterli
+        results = model(frame, verbose=False, imgsz=320, conf=0.25, iou=0.5)
         all_points = []
         for r in results:
             if r.boxes is None:
@@ -301,82 +307,46 @@ def analyze_markers(frame):
         t_apex_offset = anatomy['t_apex'][0] - spine_center_x
         rab_side = 'left' if t_apex_offset > 0 else 'right'  # sağa konveks → sol konkav
 
-        # ─── Görüntüye çiz ───────────────────────────────────
-        image = frame.copy()
-        # Omurga hattı
-        spine_pts = [anatomy['t1'], anatomy['t_apex'],
-                     anatomy['tl_apex'], anatomy['l_apex'], anatomy['l5']]
-        for i in range(len(spine_pts) - 1):
-            cv2.line(image,
-                     (int(spine_pts[i][0]), int(spine_pts[i][1])),
-                     (int(spine_pts[i+1][0]), int(spine_pts[i+1][1])),
-                     COLOR_YELLOW, 3, cv2.LINE_AA)
-
-        # Omuz çizgisi
-        cv2.line(image,
-                 (int(anatomy['right_acromion'][0]), int(anatomy['right_acromion'][1])),
-                 (int(anatomy['left_acromion'][0]), int(anatomy['left_acromion'][1])),
-                 angle_color(abs(shoulder_angle)), 2, cv2.LINE_AA)
-
-        # PSIS çizgisi
-        cv2.line(image,
-                 (int(anatomy['right_psis'][0]), int(anatomy['right_psis'][1])),
-                 (int(anatomy['left_psis'][0]), int(anatomy['left_psis'][1])),
-                 angle_color(abs(pelvic_tilt)), 2, cv2.LINE_AA)
-
-        # Marker noktaları (renkli, etiketli)
-        marker_colors = {
-            't1': (255, 200, 0),
-            'right_acromion': (0, 100, 255),
-            'left_acromion': (0, 100, 255),
-            't_apex': (255, 255, 0),
-            'tl_apex': (255, 255, 0),
-            'l_apex': (255, 255, 0),
-            'l5': (255, 200, 0),
-            'right_psis': (0, 255, 100),
-            'left_psis': (0, 255, 100),
-        }
-        marker_labels = {
-            't1': 'T1',
-            'right_acromion': 'R-A',
-            'left_acromion': 'L-A',
-            't_apex': 'T-Ap',
-            'tl_apex': 'TL-Ap',
-            'l_apex': 'L-Ap',
-            'l5': 'L5',
-            'right_psis': 'R-P',
-            'left_psis': 'L-P',
-        }
-        for name, pt in anatomy.items():
-            x, y = int(pt[0]), int(pt[1])
-            color = marker_colors.get(name, COLOR_WHITE)
-            cv2.circle(image, (x, y), 8, COLOR_WHITE, -1)
-            cv2.circle(image, (x, y), 8, COLOR_BLACK, 2)
-            cv2.circle(image, (x, y), 5, color, -1)
-            label = marker_labels.get(name, name)
-            cv2.putText(image, label, (x + 12, y - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
-
-        # Cobb açıları üst kutu
-        info_lines = [
-            f"T:  {thoracic_cobb:5.1f}d  [{angle_label(thoracic_cobb)}]",
-            f"TL: {tl_cobb:5.1f}d  [{angle_label(tl_cobb)}]",
-            f"L:  {lumbar_cobb:5.1f}d  [{angle_label(lumbar_cobb)}]",
-            f"Tip: {curve_type} | RAB: {rab_side}",
-        ]
-        overlay = image.copy()
-        cv2.rectangle(overlay, (10, 10), (340, 130), (30, 30, 30), -1)
-        cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
-        for i, line in enumerate(info_lines):
-            y_pos = 35 + i * 25
-            cv2.putText(image, line, (20, y_pos),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-
-        # Base64 encode
-        _, buffer = cv2.imencode('.jpg', image)
-        img_b64 = base64.b64encode(buffer).decode('utf-8')
-
         max_cobb = max(thoracic_cobb, tl_cobb, lumbar_cobb)
+
+        # ─── Görüntüye çiz (OPSİYONEL — yavaş!) ─────────────────
+        # Frontend artık kendi overlay'ını çiziyor, bu yavaş çizimler gereksiz.
+        # Sadece draw_overlay=True ise üret (örn: rapor için).
+        img_b64 = None
+        if draw_overlay:
+            image = frame.copy()
+            # Omurga hattı
+            spine_pts = [anatomy['t1'], anatomy['t_apex'],
+                         anatomy['tl_apex'], anatomy['l_apex'], anatomy['l5']]
+            for i in range(len(spine_pts) - 1):
+                cv2.line(image,
+                         (int(spine_pts[i][0]), int(spine_pts[i][1])),
+                         (int(spine_pts[i+1][0]), int(spine_pts[i+1][1])),
+                         COLOR_YELLOW, 3, cv2.LINE_AA)
+            # Omuz ve PSIS çizgileri
+            cv2.line(image,
+                     (int(anatomy['right_acromion'][0]), int(anatomy['right_acromion'][1])),
+                     (int(anatomy['left_acromion'][0]), int(anatomy['left_acromion'][1])),
+                     angle_color(abs(shoulder_angle)), 2, cv2.LINE_AA)
+            cv2.line(image,
+                     (int(anatomy['right_psis'][0]), int(anatomy['right_psis'][1])),
+                     (int(anatomy['left_psis'][0]), int(anatomy['left_psis'][1])),
+                     angle_color(abs(pelvic_tilt)), 2, cv2.LINE_AA)
+            # Marker noktaları
+            marker_colors = {
+                't1': (255, 200, 0), 'l5': (255, 200, 0),
+                'right_acromion': (0, 100, 255), 'left_acromion': (0, 100, 255),
+                't_apex': (255, 255, 0), 'tl_apex': (255, 255, 0), 'l_apex': (255, 255, 0),
+                'right_psis': (0, 255, 100), 'left_psis': (0, 255, 100),
+            }
+            for name, pt in anatomy.items():
+                x, y = int(pt[0]), int(pt[1])
+                color = marker_colors.get(name, COLOR_WHITE)
+                cv2.circle(image, (x, y), 7, color, -1)
+                cv2.circle(image, (x, y), 7, COLOR_BLACK, 1)
+            # JPEG encode
+            _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            img_b64 = base64.b64encode(buffer).decode('utf-8')
 
         return {
             'status': 'ok',
