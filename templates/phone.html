@@ -238,7 +238,8 @@ function updateUI(a) {
   }
 
   // Overlay
-  if(a.keypoints) drawOverlay(a.keypoints, a, scol?.points);
+  // Marker tabanlı: anatomy varsa çiz
+  if(a.anatomy || a.keypoints) drawOverlay(a.keypoints || {}, a, null);
 }
 
 function updateScolItem(itemId, valId, lblId, angle, label) {
