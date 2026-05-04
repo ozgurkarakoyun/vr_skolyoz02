@@ -6,7 +6,7 @@ reportlab ile A4 formatlı, profesyonel klinik rapor üretir.
 
 Rapor İçeriği:
   - Başlık: Hasta adı, tarih, terapist
-  - Hasta bilgileri: yaş, cinsiyet, tanı, eğri tipi, Cobb°, Risser
+  - Hasta bilgileri: yaş, cinsiyet, tanı, eğri tipi, Rad. Cobb°, Risser
   - Seans özeti: süre, tekrar, ort. skor, en iyi skor
   - Skolyoz açıları: T / TL / L (şiddet renkleriyle)
   - Schroth postür metrikleri: omuz/kalça/gövde/kayma
@@ -145,7 +145,7 @@ def info_grid(patient, session_data, stats):
     # Sol: Hasta klinik bilgileri
     left_data = [
         ['EĞRİ TİPİ', patient.get('curve_type') or '—'],
-        ['COBB AÇISI', f"{patient.get('cobb_angle') or 0}°"],
+        ['RADYOGRAFİK COBB', f"{patient.get('cobb_angle') or 0}°"],
         ['RİSSER', str(patient.get('risser') or 0)],
         ['TOPLAM SEANS', str(stats.get('total_sessions') or 0)],
     ]

@@ -157,6 +157,11 @@
 <script>
 const PATIENT_ID = parseInt('{{ patient_id }}');
 let patientData = null;
+function escapeHTML(s) {
+  return String(s ?? '')
+    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+    .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+}
 
 // ── Hasta Yükle ────────────────────────────────────────────
 async function loadPatient() {
@@ -193,7 +198,7 @@ function renderProfile(p) {
   const tags = document.getElementById('pTags');
   tags.innerHTML = '';
   if (p.curve_type) tags.innerHTML += `<span class="tag tag-curve">Schroth ${p.curve_type}</span>`;
-  if (p.cobb_angle) tags.innerHTML += `<span class="tag tag-cobb">Cobb ${p.cobb_angle}°</span>`;
+  if (p.cobb_angle) tags.innerHTML += `<span class="tag tag-cobb">Rad. Cobb ${p.cobb_angle}°</span>`;
   if (p.risser != null) tags.innerHTML += `<span class="tag tag-risser">Risser ${p.risser}</span>`;
 }
 

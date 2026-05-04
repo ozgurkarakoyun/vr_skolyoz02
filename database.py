@@ -86,6 +86,13 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sessions_patient ON sessions(patient_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_code ON sessions(session_code);
         """)
+    # Yeni kurulumlarda aynı seans kodunun tekrar kullanılmasını engelle.
+    # Eski DB'de duplicate varsa uygulama çökmesin; create_session ayrıca mevcut kaydı döndürür.
+    try:
+        with get_db() as conn:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_code_unique ON sessions(session_code)")
+    except sqlite3.IntegrityError:
+        logger.warning("Duplicate session_code mevcut; unique index oluşturulamadı. Eski kayıtlar temizlenmeli.")
     logger.info(f"DB initialized: {DB_PATH}")
 
 # ─── Hasta CRUD ──────────────────────────────────────────────
@@ -139,6 +146,14 @@ def delete_patient(patient_id):
 
 def create_session(patient_id, session_code):
     with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id, patient_id FROM sessions WHERE session_code=?",
+            (session_code,)
+        ).fetchone()
+        if existing:
+            if int(existing['patient_id']) != int(patient_id):
+                raise ValueError('Bu seans kodu farklı bir hastaya ait')
+            return existing['id']
         cur = conn.execute("""
             INSERT INTO sessions (patient_id, session_code)
             VALUES (?,?)
@@ -204,7 +219,7 @@ def get_patient_sessions(patient_id, limit=20):
 def get_session_by_code(session_code):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM sessions WHERE session_code=?", (session_code,)
+            "SELECT * FROM sessions WHERE session_code=? ORDER BY id DESC LIMIT 1", (session_code,)
         ).fetchone()
         return dict(row) if row else None
 

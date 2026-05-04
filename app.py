@@ -1,16 +1,26 @@
 """
 app.py — Schroth VR Backend v5
 """
-# ─── KRİTİK: Eventlet monkey_patch en başta olmalı ──────────
-# Diğer importlardan önce çağrılmazsa eventlet düzgün çalışmaz
-# (socket, ssl, threading vs. patch'lenmemiş olur)
-import eventlet
-eventlet.monkey_patch()
+# ─── Eventlet opsiyonel ─────────────────────────────────────
+# Railway production için eventlet önerilir; lokal geliştirmede kurulu değilse
+# Flask-SocketIO threading moduna düşer.
+try:
+    import eventlet
+    eventlet.monkey_patch()
+    SOCKET_ASYNC_MODE = 'eventlet'
+except ImportError:
+    eventlet = None
+    SOCKET_ASYNC_MODE = 'threading'
 
 import os
 import logging
 import base64
 import json
+import hmac
+import secrets
+from collections import deque
+from functools import wraps
+from statistics import median
 from datetime import datetime
 
 # ── Logging ilk önce kurulsun ────────────────────────────────
@@ -25,13 +35,46 @@ from flask import Flask, render_template, request, jsonify, make_response
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 app = Flask(__name__)
+
+# Production güvenliği: sabit SECRET_KEY kullanılmaz.
 _secret = os.environ.get('SECRET_KEY', '')
 if not _secret:
-    logger.warning("SECRET_KEY env var ayarlanmamış! Production için mutlaka ayarlayın.")
-    _secret = 'schroth-vr-secret-2024'
+    if os.environ.get('FLASK_ENV') == 'production' or os.environ.get('APP_ENV') == 'production':
+        raise RuntimeError('Production için SECRET_KEY environment variable zorunludur')
+    logger.warning("SECRET_KEY env var ayarlanmamış; geçici geliştirme anahtarı üretildi.")
+    _secret = secrets.token_hex(32)
 app.config['SECRET_KEY'] = _secret
-_cors_origins = os.environ.get('CORS_ORIGINS', '*')
-socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode='eventlet')
+
+# CORS: Production'da '*' yerine CORS_ORIGINS=https://domain.com biçiminde ayarlayın.
+_cors_raw = os.environ.get('CORS_ORIGINS', '*')
+_cors_origins = [x.strip() for x in _cors_raw.split(',') if x.strip()] if _cors_raw != '*' else '*'
+if _cors_origins == '*':
+    logger.warning("CORS_ORIGINS='*' aktif. Production'da domain ile sınırlandırın.")
+socketio = SocketIO(app, cors_allowed_origins=_cors_origins, async_mode=SOCKET_ASYNC_MODE)
+
+# Opsiyonel HTTP Basic Auth.
+# AUTH_USERNAME ve AUTH_PASSWORD ayarlanırsa hasta yönetimi/API/PDF korunur.
+def _auth_enabled():
+    return bool(os.environ.get('AUTH_USERNAME') and os.environ.get('AUTH_PASSWORD'))
+
+def _check_basic_auth():
+    auth = request.authorization
+    if not auth:
+        return False
+    return (
+        hmac.compare_digest(auth.username or '', os.environ.get('AUTH_USERNAME', ''))
+        and hmac.compare_digest(auth.password or '', os.environ.get('AUTH_PASSWORD', ''))
+    )
+
+def require_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _auth_enabled() or _check_basic_auth():
+            return fn(*args, **kwargs)
+        resp = make_response('Yetkili kullanıcı girişi gerekli', 401)
+        resp.headers['WWW-Authenticate'] = 'Basic realm="Schroth VR"'
+        return resp
+    return wrapper
 
 # ── Lazy imports (crash etmesin) ─────────────────────────────
 # cv2, numpy, ultralytics — ilk frame gelince yüklenir
@@ -117,6 +160,36 @@ except Exception as e:
 # ─── Seans havuzu ────────────────────────────────────────────
 _analyzers: dict = {}
 _session_patients: dict = {}
+_recent_values: dict = {}
+
+def _smooth_metric(room: str, key: str, value, n: int = 12):
+    """Frame bazlı jitter'ı azaltmak için oda/metrik başına medyan filtre."""
+    if value is None:
+        return value
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return value
+    room_cache = _recent_values.setdefault(room, {})
+    q = room_cache.setdefault(key, deque(maxlen=n))
+    q.append(v)
+    return round(float(median(q)), 1)
+
+def _resolve_patient_id(room: str):
+    """Seans-hasta eşleşmesini RAM cache + DB üzerinden çöz."""
+    pid = _session_patients.get(room)
+    if pid:
+        return pid
+    if DB_OK:
+        try:
+            sess = get_session_by_code(room)
+            if sess and sess.get('patient_id'):
+                pid = int(sess['patient_id'])
+                _session_patients[room] = pid
+                return pid
+        except Exception as e:
+            logger.warning(f"Patient/session resolve failed for {room}: {e}")
+    return None
 
 def get_analyzer(room: str):
     if not ANALYZER_OK:
@@ -183,11 +256,11 @@ def process_frame(image_b64: str, room: str) -> dict:
         # Marker engine zaten her şeyi hesaplamış durumda
 
         # Klinik metrikler (marker engine'den DOĞRUDAN)
-        combined['shoulder_angle']     = marker_data['shoulder_angle']
-        combined['hip_angle']          = marker_data['pelvic_tilt']  # PSIS açısı = kalça hizası
-        combined['pelvic_tilt']        = marker_data['pelvic_tilt']
-        combined['lateral_shift_px']   = marker_data['lateral_shift_px']
-        combined['lateral_shift_pct']  = marker_data['lateral_shift_pct']
+        combined['shoulder_angle']     = _smooth_metric(room, 'shoulder_angle', marker_data['shoulder_angle'])
+        combined['hip_angle']          = _smooth_metric(room, 'hip_angle', marker_data['pelvic_tilt'])  # PSIS açısı = kalça hizası
+        combined['pelvic_tilt']        = combined['hip_angle']
+        combined['lateral_shift_px']   = _smooth_metric(room, 'lateral_shift_px', marker_data['lateral_shift_px'])
+        combined['lateral_shift_pct']  = _smooth_metric(room, 'lateral_shift_pct', marker_data['lateral_shift_pct'])
         combined['curve_type']         = marker_data['curve_type']
         combined['dominant_curve']     = marker_data['dominant_curve']
         combined['rab_side']           = marker_data['rab_side']
@@ -195,17 +268,18 @@ def process_frame(image_b64: str, room: str) -> dict:
 
         # Cobb değerleri
         combined['scoliosis'] = {
-            'thoracic':      marker_data['angles']['thoracic'],
-            'thoracolumbar': marker_data['angles']['thoracolumbar'],
-            'lumbar':        marker_data['angles']['lumbar'],
+            'thoracic':      _smooth_metric(room, 'thoracic', marker_data['angles']['thoracic']),
+            'thoracolumbar': _smooth_metric(room, 'thoracolumbar', marker_data['angles']['thoracolumbar']),
+            'lumbar':        _smooth_metric(room, 'lumbar', marker_data['angles']['lumbar']),
             'labels':        marker_data['labels'],
             'severity':      marker_data['severity'],
-            'max_angle':     marker_data['max_angle'],
-            'cobb_source':   'marker',
+            'max_angle':     _smooth_metric(room, 'max_angle', marker_data['max_angle']),
+            'cobb_source':   'marker_proxy',
+            'disclaimer':    'Marker tabanlı postür takip metriğidir; radyografik Cobb açısı değildir.',
         }
         # Cobb proxy = en büyük açı (UI uyumluluğu için)
-        combined['cobb_proxy']  = marker_data['max_angle']
-        combined['cobb_source'] = 'marker'
+        combined['cobb_proxy']  = combined['scoliosis']['max_angle']
+        combined['cobb_source'] = 'marker_proxy'
 
         # Marker engine'in çizdiği annotated görüntü (Quest için)
         if marker_data.get('result_image_b64'):
@@ -220,11 +294,11 @@ def process_frame(image_b64: str, room: str) -> dict:
         dx = t1[0] - l5[0]
         dy = abs(t1[1] - l5[1]) or 1
         trunk_incl = math.degrees(math.atan2(dx, dy))
-        combined['trunk_inclination'] = round(trunk_incl, 1)
+        combined['trunk_inclination'] = _smooth_metric(room, 'trunk_inclination', round(trunk_incl, 1))
 
         # ─── Schroth Skor (basit) ─────────────────────────────
         # Marker'lardan basit skor: max açı düşükse skor yüksek
-        max_cobb = marker_data['max_angle']
+        max_cobb = combined['cobb_proxy']
         # 0° → 100 puan, 30°+ → 50 puan, 50°+ → 0 puan
         if max_cobb < 5:
             score = 100
@@ -268,6 +342,7 @@ def index():
     return render_template('index.html')
 
 @app.route('/therapist')
+@require_auth
 def therapist():
     return render_template('therapist.html')
 
@@ -280,6 +355,7 @@ def quest():
     return render_template('quest.html')
 
 @app.route('/patient/<int:pid>')
+@require_auth
 def patient_detail(pid):
     return render_template('patient_detail.html', patient_id=pid)
 
@@ -340,14 +416,7 @@ def admin_upload():
 # ─── Health check ─────────────────────────────────────────────
 @app.route('/health')
 def health():
-    # Marker model gerçekten yüklenebildi mi kontrol et
-    marker_loaded = False
-    if MARKER_OK:
-        try:
-            marker_loaded = get_marker_model() is not None
-        except Exception:
-            marker_loaded = False
-
+    # Hızlı health check: YOLO modelini burada yüklemeyin.
     return jsonify({
         'status': 'ok',
         'timestamp': datetime.now().isoformat(),
@@ -355,17 +424,30 @@ def health():
         'analyzer': ANALYZER_OK,
         'scol_engine': SCOL_OK,
         'marker_engine': MARKER_OK,
-        'marker_model_loaded': marker_loaded,
         'pdf': PDF_OK,
+        'auth_enabled': _auth_enabled(),
         'active_sessions': len(_analyzers),
     })
 
+@app.route('/health/model')
+@require_auth
+def health_model():
+    marker_loaded = False
+    if MARKER_OK:
+        try:
+            marker_loaded = get_marker_model() is not None
+        except Exception:
+            marker_loaded = False
+    return jsonify({'marker_model_loaded': marker_loaded})
+
 # ─── Hasta API ────────────────────────────────────────────────
 @app.route('/api/patients', methods=['GET'])
+@require_auth
 def api_patients():
     return jsonify(get_all_patients())
 
 @app.route('/api/patients', methods=['POST'])
+@require_auth
 def api_create_patient():
     d = request.json or {}
     if not d.get('name'):
@@ -383,6 +465,7 @@ def api_create_patient():
     return jsonify({'id': pid, 'status': 'created'}), 201
 
 @app.route('/api/patients/<int:pid>', methods=['GET'])
+@require_auth
 def api_get_patient(pid):
     p = get_patient(pid)
     if not p:
@@ -390,24 +473,29 @@ def api_get_patient(pid):
     return jsonify(p)
 
 @app.route('/api/patients/<int:pid>', methods=['PUT'])
+@require_auth
 def api_update_patient(pid):
     update_patient(pid, **(request.json or {}))
     return jsonify({'status': 'updated'})
 
 @app.route('/api/patients/<int:pid>', methods=['DELETE'])
+@require_auth
 def api_delete_patient(pid):
     delete_patient(pid)
     return jsonify({'status': 'deleted'})
 
 @app.route('/api/patients/<int:pid>/sessions', methods=['GET'])
+@require_auth
 def api_patient_sessions(pid):
     return jsonify(get_patient_sessions(pid))
 
 @app.route('/api/patients/<int:pid>/stats', methods=['GET'])
+@require_auth
 def api_patient_stats(pid):
     return jsonify(get_patient_stats(pid))
 
 @app.route('/api/sessions/<code>', methods=['GET'])
+@require_auth
 def api_get_session(code):
     s = get_session_by_code(code)
     if not s:
@@ -415,23 +503,31 @@ def api_get_session(code):
     return jsonify(s)
 
 @app.route('/api/sessions/<code>/end', methods=['POST'])
+@require_auth
 def api_end_session(code):
     end_session(code, request.json or {})
     return jsonify({'status': 'ended'})
 
 @app.route('/api/sessions/start', methods=['POST'])
+@require_auth
 def api_start_session():
     d = request.json or {}
     pid = d.get('patient_id')
     code = d.get('session_code')
     if not pid or not code:
         return jsonify({'error': 'patient_id ve session_code zorunlu'}), 400
-    sid = create_session(int(pid), code)
+    if not get_patient(int(pid)):
+        return jsonify({'error': 'Hasta bulunamadı'}), 404
+    try:
+        sid = create_session(int(pid), code)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
     _session_patients[code] = int(pid)
     return jsonify({'session_db_id': sid, 'status': 'started'})
 
 # ─── PDF routes ───────────────────────────────────────────────
 @app.route('/api/patients/<int:pid>/report.pdf')
+@require_auth
 def api_patient_report(pid):
     if not PDF_OK or not DB_OK:
         return jsonify({'error': 'PDF/DB kullanılamıyor'}), 503
@@ -455,6 +551,7 @@ def api_patient_report(pid):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/sessions/<code>/report.pdf')
+@require_auth
 def api_session_report(code):
     if not PDF_OK:
         return jsonify({'error': 'PDF kullanılamıyor'}), 503
@@ -516,7 +613,9 @@ def on_frame(data):
         if not image_b64:
             return
         analysis = process_frame(image_b64, room)
-        pid = _session_patients.get(room)
+        if not isinstance(analysis, dict):
+            analysis = {}
+        pid = _resolve_patient_id(room)
         if pid:
             analysis['patient_id'] = pid
 
@@ -539,6 +638,7 @@ def on_reset_session(data):
     room = data.get('room', 'default')
     if room in _analyzers:
         _analyzers[room].reset_session()
+    _recent_values.pop(room, None)
     emit('session_reset', {'room': room}, to=room)
 
 @socketio.on('link_patient')

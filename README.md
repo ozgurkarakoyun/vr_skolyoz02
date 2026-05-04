@@ -77,3 +77,17 @@ pip install -r requirements.txt
 python app.py
 # → http://localhost:5000
 ```
+
+
+## Production güvenlik notları
+
+Bu sürümde hasta yönetimi ve rapor API'leri opsiyonel HTTP Basic Auth ile korunabilir. Railway Variables bölümüne şu değerleri ekleyin:
+
+- `SECRET_KEY`: uzun ve rastgele bir değer
+- `AUTH_USERNAME`: kullanıcı adı
+- `AUTH_PASSWORD`: güçlü parola
+- `CORS_ORIGINS`: örn. `https://senin-domainin.com`
+- `DATA_DIR`: Railway volume kullanıyorsanız `/data`
+- `MARKER_MODEL_PATH`: örn. `/data/models/model_point4.pt`
+
+Canlı analizde gösterilen `marker_proxy` değerleri radyografik Cobb açısı değildir; marker tabanlı postür/egzersiz takip metrikleridir. Klinik karar için radyografik ölçüm ve hekim değerlendirmesi gerekir.

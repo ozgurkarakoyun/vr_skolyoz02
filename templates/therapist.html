@@ -202,7 +202,7 @@
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Cobb Açısı (°)</label>
+        <label class="form-label">Radyografik Cobb Açısı (°)</label>
         <input class="form-input" id="fCobb" type="number" placeholder="0" min="0" max="120">
       </div>
     </div>
@@ -283,11 +283,11 @@ function renderPatients(patients) {
       <div class="pc-header">
         <div class="pc-avatar ${gender}">${genderCh}</div>
         <div>
-          <div class="pc-name">${p.name}</div>
-          <div class="pc-meta">${age} · ${lastSess}</div>
+          <div class="pc-name">${escapeHTML(p.name)}</div>
+          <div class="pc-meta">${escapeHTML(age)} · ${escapeHTML(lastSess)}</div>
         </div>
       </div>
-      ${p.curve_type ? `<div class="pc-curve">Schroth ${p.curve_type}</div>` : ''}
+      ${p.curve_type ? `<div class="pc-curve">Schroth ${escapeHTML(p.curve_type)}</div>` : ''}
       <div class="pc-metrics">
         <div class="pcm">
           <div class="pcm-val">${p.session_count||0}</div>
@@ -295,7 +295,7 @@ function renderPatients(patients) {
         </div>
         <div class="pcm">
           <div class="pcm-val" style="color:${(p.cobb_angle||0)>40?'#ff4757':(p.cobb_angle||0)>20?'#ffa502':'#2ed573'}">${p.cobb_angle||0}°</div>
-          <div class="pcm-name">COBB</div>
+          <div class="pcm-name">RAD. COBB</div>
         </div>
         <div class="pcm">
           <div class="pcm-val" style="color:#2ed573">${p.overall_avg_score ? Math.round(p.overall_avg_score) : '—'}</div>
@@ -427,7 +427,12 @@ function generateCode() {
   return Array.from({length:6}, () => chars[Math.floor(Math.random()*chars.length)]).join('');
 }
 
-function escHtml(s) { return s.replace(/'/g, "\\'"); }
+function escapeHTML(s) {
+  return String(s ?? '')
+    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+    .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+}
+function escHtml(s) { return String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
 
 // Modal dışına tıkla kapat
 document.querySelectorAll('.modal-bg').forEach(el => {

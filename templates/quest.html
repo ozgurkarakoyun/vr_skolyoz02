@@ -167,7 +167,9 @@
 <script src="/static/exercise_tracker.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
-const SESSION = new URLSearchParams(location.search).get('session') || localStorage.getItem('schroth_session') || 'DEFAULT';
+const params = new URLSearchParams(location.search);
+const SESSION = params.get('session') || localStorage.getItem('schroth_session') || 'DEFAULT';
+const PATIENT_ID = params.get('patient');
 document.getElementById('sessionDisplay').textContent = SESSION;
 
 let socket, xrSession=null, xrRefSpace=null, gl=null, tex=null, offCanvas=null, offCtx=null;
@@ -180,7 +182,7 @@ setInterval(() => {
 
 function initSocket() {
   socket=io();
-  socket.on('connect', () => { document.getElementById('statusDot').classList.add('connected'); socket.emit('join_room',{room:SESSION,role:'quest'}); });
+  socket.on('connect', () => { document.getElementById('statusDot').classList.add('connected'); socket.emit('join_room',{room:SESSION,role:'quest'}); if(PATIENT_ID) socket.emit('link_patient',{room:SESSION,patient_id:PATIENT_ID}); });
   socket.on('disconnect', () => document.getElementById('statusDot').classList.remove('connected'));
   socket.on('analysis', d => {
     latestAnalysis=d.analysis;
@@ -296,6 +298,12 @@ function drawQuestOverlay(a){
   }
 }
 
+function escapeHTML(s) {
+  return String(s ?? '')
+    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+    .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+}
+
 function resetSession() { if(socket?.connected) socket.emit('reset_session',{room:SESSION}); }
 
 function sevClass(label) { return !label?'normal':label==='KRİTİK'?'kritik':label==='ORTA'?'orta':'normal'; }
@@ -305,7 +313,7 @@ function updateNormalUI(a) {
   const score=a.score||0;
   const se=document.getElementById('scoreNum');
   se.textContent=score; se.style.color=score>=80?'#2ed573':score>=55?'#ffa502':'#ff4757';
-  document.getElementById('curveBox').innerHTML=`<small>EĞRİ TİPİ</small>${a.curve_type||'—'}`;
+  document.getElementById('curveBox').innerHTML=`<small>EĞRİ TİPİ</small>${escapeHTML(a.curve_type||'—')}`;
   document.getElementById('mOmuz').textContent=(a.shoulder_angle||0).toFixed(1)+'°';
   document.getElementById('mKalca').textContent=(a.hip_angle||0).toFixed(1)+'°';
   document.getElementById('mTrunk').textContent=(a.trunk_inclination||0).toFixed(1)+'°';

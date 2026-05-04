@@ -103,9 +103,10 @@ def assign_anatomical_positions(points):
     # En çok 9 marker al (fazlaysa Y'ye göre yayılan ana 9'u seç)
     pts = sorted(points, key=lambda p: p[1])  # Y'ye göre sırala
     if len(pts) > REQUIRED_MARKERS:
-        # Çok fazla marker → en güvenli 9'unu al (TODO: konfigürasyon)
-        # Şimdilik ilk 9'u alıyoruz (en üstten 9 nokta)
-        pts = pts[:REQUIRED_MARKERS]
+        # Fazla nokta normalde confidence'a göre analyze_markers içinde azaltılır.
+        # Burada güvenli fallback olarak dikey dağılımı en iyi temsil eden 9 noktayı seç.
+        idxs = np.linspace(0, len(pts) - 1, REQUIRED_MARKERS).round().astype(int)
+        pts = [pts[int(i)] for i in idxs]
 
     # Y'ye göre 3 gruba böl: üst (3), orta (3), alt (3)
     upper = sorted(pts[0:3], key=lambda p: p[0])  # X'e göre sırala (sol→sağ)
@@ -228,9 +229,10 @@ def analyze_markers(frame, draw_overlay=False):
             if r.boxes is None:
                 continue
             boxes_xywh = r.boxes.xywh.cpu().numpy()
-            for box in boxes_xywh:
+            confs = r.boxes.conf.cpu().numpy() if getattr(r.boxes, 'conf', None) is not None else np.ones(len(boxes_xywh))
+            for box, conf in zip(boxes_xywh, confs):
                 cx, cy = float(box[0]), float(box[1])
-                all_points.append((cx, cy))
+                all_points.append((cx, cy, float(conf)))
 
         if len(all_points) < REQUIRED_MARKERS:
             logger.debug(f"Yetersiz marker: {len(all_points)}/{REQUIRED_MARKERS}")
@@ -241,8 +243,12 @@ def analyze_markers(frame, draw_overlay=False):
                 'detected_points': [(int(p[0]), int(p[1])) for p in all_points],
             }
 
+        # Fazla marker varsa en güvenilir 9 tespiti kullan.
+        selected_points = sorted(all_points, key=lambda p: p[2], reverse=True)[:REQUIRED_MARKERS]
+        point_xy = [(p[0], p[1]) for p in selected_points]
+
         # Anatomik atama
-        anatomy = assign_anatomical_positions(all_points)
+        anatomy = assign_anatomical_positions(point_xy)
         if anatomy is None:
             return {
                 'detected_markers': len(all_points),

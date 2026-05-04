@@ -151,13 +151,15 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
-const SESSION = new URLSearchParams(location.search).get('session') || localStorage.getItem('schroth_session') || 'DEFAULT';
+const params = new URLSearchParams(location.search);
+const SESSION = params.get('session') || localStorage.getItem('schroth_session') || 'DEFAULT';
+const PATIENT_ID = params.get('patient');
 document.getElementById('sessionDisplay').textContent = SESSION;
 let socket, stream, frameInterval, frameCount=0, lastFpsTime=Date.now();
 
 function initSocket() {
   socket = io();
-  socket.on('connect', () => { document.getElementById('statusDot').classList.add('connected'); socket.emit('join_room',{room:SESSION,role:'phone'}); });
+  socket.on('connect', () => { document.getElementById('statusDot').classList.add('connected'); socket.emit('join_room',{room:SESSION,role:'phone'}); if(PATIENT_ID) socket.emit('link_patient',{room:SESSION,patient_id:PATIENT_ID}); });
   socket.on('disconnect', () => document.getElementById('statusDot').classList.remove('connected'));
   socket.on('analysis', d => { if(d.analysis) updateUI(d.analysis); });
 }
@@ -200,6 +202,8 @@ function startFrameCapture() {
     cv.getContext('2d').drawImage(vd, 0, 0, cv.width, cv.height);
 
     pendingFrame = true;
+    const frameSentAt = Date.now();
+    setTimeout(() => { if (pendingFrame && Date.now() - frameSentAt >= 1900) pendingFrame = false; }, 2000);
     socket.emit('frame', {
       image: cv.toDataURL('image/jpeg', 0.5),  // 0.7 → 0.5 (daha küçük)
       room: SESSION
@@ -213,6 +217,12 @@ function startFrameCapture() {
       lastFpsTime = now;
     }
   }, 100);  // 125ms → 100ms (10 FPS hedef)
+}
+
+function escapeHTML(s) {
+  return String(s ?? '')
+    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+    .replaceAll('"','&quot;').replaceAll("'",'&#039;');
 }
 
 function resetSession() { if(socket?.connected) socket.emit('reset_session',{room:SESSION}); }
@@ -238,7 +248,7 @@ function updateUI(a) {
   // Talimatlar
   const insts=[...(a.instructions||[])];
   if(a.phase_instruction) insts.unshift('📋 '+a.phase_instruction);
-  if(insts.length) document.getElementById('instructionsList').innerHTML=insts.map(i=>`<div class="chip">${i}</div>`).join('');
+  if(insts.length) document.getElementById('instructionsList').innerHTML=insts.map(i=>`<div class="chip">${escapeHTML(i)}</div>`).join('');
 
   // Faz
   if(a.phase){
