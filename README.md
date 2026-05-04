@@ -91,3 +91,40 @@ Bu sürümde hasta yönetimi ve rapor API'leri opsiyonel HTTP Basic Auth ile kor
 - `MARKER_MODEL_PATH`: örn. `/data/models/model_point4.pt`
 
 Canlı analizde gösterilen `marker_proxy` değerleri radyografik Cobb açısı değildir; marker tabanlı postür/egzersiz takip metrikleridir. Klinik karar için radyografik ölçüm ve hekim değerlendirmesi gerekir.
+
+## Performans ayarları
+
+Bu sürümde canlı analiz akışı tıkanmayı azaltmak için yeniden düzenlendi:
+
+- Backend her gelen kareyi sıraya almaz; oda/seans başına sadece en son kareyi saklar.
+- YOLO analizi arka planda çalışır; Socket.IO `frame` event'i uzun süre bloklanmaz.
+- `ANALYSIS_FPS` ile analiz hızı sınırlandırılır. Varsayılan: `4` FPS.
+- Telefon tarafında gönderim 4 FPS, maksimum 640 px genişlik ve JPEG kalite `0.55` olarak optimize edilmiştir.
+- Marker YOLO inference ayarları environment variable ile değiştirilebilir.
+
+Önerilen Railway Variables:
+
+```text
+ANALYSIS_FPS=4
+MARKER_IMGSZ=416
+MARKER_CONF=0.35
+MARKER_IOU=0.50
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+TORCH_NUM_THREADS=1
+```
+
+Daha hızlı ama biraz daha düşük hassasiyet için:
+
+```text
+ANALYSIS_FPS=3
+MARKER_IMGSZ=320
+MARKER_CONF=0.30
+```
+
+Marker kaçırıyorsa:
+
+```text
+MARKER_IMGSZ=512
+MARKER_CONF=0.25
+```

@@ -166,7 +166,7 @@ function initSocket() {
 
 async function startCamera() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}},audio:false});
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:960},height:{ideal:540}},audio:false});
     document.getElementById('localVideo').srcObject = stream;
     document.getElementById('startBtn').style.display='none';
     document.getElementById('stopBtn').style.display='block';
@@ -185,17 +185,23 @@ function stopStream() {
 
 function startFrameCapture() {
   const cv=document.createElement('canvas'), vd=document.getElementById('localVideo');
-  let pendingFrame = false;  // Backend meşgulse skip
-  const TARGET_WIDTH = 640;  // Backend'e gönderilecek max genişlik
+  let pendingFrame = false;
 
-  // Backend cevabı geldikçe pending'i sıfırla
+  // Performans ayarları: backend sadece son frame'i analiz eder.
+  // Telefon tarafında da 4 FPS ve küçük JPEG ile gereksiz trafik azaltılır.
+  const TARGET_WIDTH = 640;
+  const JPEG_QUALITY = 0.55;
+  const FRAME_INTERVAL_MS = 250; // 4 FPS
+
+  // Backend frame'i kuyruğa aldığını bildirince yeni frame gönderimine izin ver.
+  socket.on('frame_received', () => { pendingFrame = false; });
   socket.on('analysis', () => { pendingFrame = false; });
 
   frameInterval = setInterval(() => {
     if(!vd.videoWidth || !socket?.connected) return;
-    if(pendingFrame) return;  // ← önceki frame hâlâ işleniyor, atla
+    if(pendingFrame) return;
 
-    // Resize: 640px max genişlik, oran korunur
+    // Resize: max 640px genişlik, oran korunur.
     const scale = Math.min(1, TARGET_WIDTH / vd.videoWidth);
     cv.width = Math.round(vd.videoWidth * scale);
     cv.height = Math.round(vd.videoHeight * scale);
@@ -203,9 +209,12 @@ function startFrameCapture() {
 
     pendingFrame = true;
     const frameSentAt = Date.now();
-    setTimeout(() => { if (pendingFrame && Date.now() - frameSentAt >= 1900) pendingFrame = false; }, 2000);
+    setTimeout(() => {
+      if (pendingFrame && Date.now() - frameSentAt >= 1800) pendingFrame = false;
+    }, 1900);
+
     socket.emit('frame', {
-      image: cv.toDataURL('image/jpeg', 0.5),  // 0.7 → 0.5 (daha küçük)
+      image: cv.toDataURL('image/jpeg', JPEG_QUALITY),
       room: SESSION
     });
 
@@ -216,7 +225,7 @@ function startFrameCapture() {
       frameCount = 0;
       lastFpsTime = now;
     }
-  }, 100);  // 125ms → 100ms (10 FPS hedef)
+  }, FRAME_INTERVAL_MS);
 }
 
 function escapeHTML(s) {

@@ -208,3 +208,17 @@ git push origin main
 - Railway Docs: https://docs.railway.app
 - WebXR Emulator (Chrome): https://chrome.google.com/webstore/detail/webxr-api-emulator
 - Meta Quest Browser WebXR: Settings → Experimental Features → WebXR aktivasyonu
+
+## Performans için önerilen Railway değişkenleri
+
+```text
+ANALYSIS_FPS=4
+MARKER_IMGSZ=416
+MARKER_CONF=0.35
+MARKER_IOU=0.50
+OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1
+TORCH_NUM_THREADS=1
+```
+
+Railway küçük CPU/RAM planlarında `MARKER_IMGSZ=320` ve `ANALYSIS_FPS=3` daha stabil çalışabilir. Marker tespiti zayıflarsa `MARKER_IMGSZ=512` veya `MARKER_CONF=0.25` denenebilir.

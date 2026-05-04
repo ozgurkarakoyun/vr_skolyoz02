@@ -18,9 +18,11 @@ import base64
 import json
 import hmac
 import secrets
+import time
 from collections import deque
 from functools import wraps
 from statistics import median
+from threading import Lock
 from datetime import datetime
 
 # ── Logging ilk önce kurulsun ────────────────────────────────
@@ -161,6 +163,23 @@ except Exception as e:
 _analyzers: dict = {}
 _session_patients: dict = {}
 _recent_values: dict = {}
+
+# ─── Performans / frame kuyruğu ayarları ─────────────────────
+# Amaç: Her gelen kareyi analiz kuyruğuna sokmak yerine yalnızca en son kareyi
+# işlemek. Bu, YOLO inference yavaşladığında Socket.IO'nun tıkanmasını önler.
+def _env_float(name: str, default: float, min_value: float, max_value: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+ANALYSIS_FPS = _env_float('ANALYSIS_FPS', 4.0, 0.5, 10.0)
+MIN_ANALYSIS_INTERVAL = 1.0 / ANALYSIS_FPS
+_latest_frames: dict = {}
+_processing_rooms: dict = {}
+_last_analysis_time: dict = {}
+_frame_lock = Lock()
 
 def _smooth_metric(room: str, key: str, value, n: int = 12):
     """Frame bazlı jitter'ı azaltmak için oda/metrik başına medyan filtre."""
@@ -605,6 +624,74 @@ def on_answer(data):
 def on_ice_candidate(data):
     emit('ice_candidate', data, to=data.get('room'), include_self=False)
 
+def _emit_processed_frame(room: str, image_b64: str, analysis: dict):
+    """Analiz sonucunu güvenli şekilde ilgili Socket.IO odasına gönder."""
+    if not isinstance(analysis, dict):
+        analysis = {}
+
+    pid = _resolve_patient_id(room)
+    if pid:
+        analysis['patient_id'] = pid
+
+    # Quest'e gönderilecek görüntü:
+    # Marker tespit edildiyse → çizimli versiyon; aksi halde → orijinal görüntü.
+    annotated = analysis.pop('result_image_b64', None) if isinstance(analysis, dict) else None
+    display_image = annotated if annotated else image_b64
+
+    socketio.emit('analysis', {
+        'analysis': analysis,
+        'image': display_image,
+        'timestamp': datetime.now().isoformat(),
+        'analysis_fps_limit': ANALYSIS_FPS,
+    }, to=room)
+
+
+def _process_latest_frame_worker(room: str):
+    """
+    Oda başına tek worker çalışır. Her döngüde yalnızca en son frame'i alır;
+    eski frame'ler bilinçli olarak atılır. Böylece YOLO kuyruğu birikmez.
+    """
+    try:
+        while True:
+            with _frame_lock:
+                image_b64 = _latest_frames.pop(room, None)
+
+            if image_b64 is None:
+                break
+
+            # Analiz FPS sınırı: aynı oda için çok sık inference yapma.
+            elapsed = time.time() - _last_analysis_time.get(room, 0)
+            if elapsed < MIN_ANALYSIS_INTERVAL:
+                socketio.sleep(MIN_ANALYSIS_INTERVAL - elapsed)
+
+            _last_analysis_time[room] = time.time()
+            analysis = process_frame(image_b64, room)
+            _emit_processed_frame(room, image_b64, analysis)
+
+            # Bu arada yeni frame geldiyse döngü devam eder, gelmediyse çıkar.
+            with _frame_lock:
+                has_newer_frame = room in _latest_frames
+            if not has_newer_frame:
+                break
+    except Exception as e:
+        logger.error(f"frame worker error for room={room}: {e}", exc_info=True)
+    finally:
+        with _frame_lock:
+            _processing_rooms[room] = False
+            has_waiting_frame = room in _latest_frames
+        # Race condition koruması: worker kapanırken yeni frame geldiyse yeni worker başlat.
+        if has_waiting_frame:
+            _start_frame_worker_if_needed(room)
+
+
+def _start_frame_worker_if_needed(room: str):
+    with _frame_lock:
+        if _processing_rooms.get(room):
+            return
+        _processing_rooms[room] = True
+    socketio.start_background_task(_process_latest_frame_worker, room)
+
+
 @socketio.on('frame')
 def on_frame(data):
     try:
@@ -612,26 +699,22 @@ def on_frame(data):
         room = data.get('room', 'default')
         if not image_b64:
             return
-        analysis = process_frame(image_b64, room)
-        if not isinstance(analysis, dict):
-            analysis = {}
-        pid = _resolve_patient_id(room)
-        if pid:
-            analysis['patient_id'] = pid
 
-        # Quest'e gönderilecek görüntü:
-        # Marker tespit edildiyse → çizimli versiyon (analizden gelen)
-        # Aksi halde → orijinal görüntü
-        annotated = analysis.pop('result_image_b64', None) if isinstance(analysis, dict) else None
-        display_image = annotated if annotated else image_b64
+        # Asıl performans düzeltmesi: her frame'i işleme alma.
+        # Sadece ilgili odanın en son frame'ini sakla. Worker boşsa başlat.
+        with _frame_lock:
+            _latest_frames[room] = image_b64
 
-        emit('analysis', {
-            'analysis': analysis,
-            'image': display_image,
-            'timestamp': datetime.now().isoformat()
-        }, to=room)
+        _start_frame_worker_if_needed(room)
+
+        # Telefon tarafındaki pending kilidini erken çözmek için hafif ACK.
+        emit('frame_received', {
+            'room': room,
+            'queued': True,
+            'analysis_fps_limit': ANALYSIS_FPS,
+        })
     except Exception as e:
-        logger.error(f"frame event error: {e}")
+        logger.error(f"frame event error: {e}", exc_info=True)
 
 @socketio.on('reset_session')
 def on_reset_session(data):
@@ -639,6 +722,9 @@ def on_reset_session(data):
     if room in _analyzers:
         _analyzers[room].reset_session()
     _recent_values.pop(room, None)
+    with _frame_lock:
+        _latest_frames.pop(room, None)
+        _last_analysis_time.pop(room, None)
     emit('session_reset', {'room': room}, to=room)
 
 @socketio.on('link_patient')

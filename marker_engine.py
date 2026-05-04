@@ -44,6 +44,24 @@ ANGLE_MID  = 10.0   # ORTA eşiği
 
 REQUIRED_MARKERS = 9
 
+def _env_int(name, default, min_value, max_value):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+def _env_float(name, default, min_value, max_value):
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+MARKER_IMGSZ = _env_int('MARKER_IMGSZ', 416, 256, 960)
+MARKER_CONF = _env_float('MARKER_CONF', 0.35, 0.05, 0.95)
+MARKER_IOU = _env_float('MARKER_IOU', 0.50, 0.10, 0.95)
+
 # Anatomik nokta isimleri (sıralama için)
 MARKER_NAMES = [
     't1',              # 0  Üst omurga
@@ -64,6 +82,10 @@ def get_marker_model():
     global _marker_model
     if _marker_model is None:
         import torch
+        try:
+            torch.set_num_threads(int(os.environ.get('TORCH_NUM_THREADS', '1')))
+        except Exception:
+            pass
         _orig_load = torch.load
         try:
             from ultralytics import YOLO
@@ -221,9 +243,16 @@ def analyze_markers(frame, draw_overlay=False):
         return None
 
     try:
-        # Hızlı inference: küçük input boyutu (320 px), low conf threshold
-        # imgsz=320: 640'a göre 4x hızlı, marker tespiti için yeterli
-        results = model(frame, verbose=False, imgsz=320, conf=0.25, iou=0.5)
+        # Hızlı inference: input boyutu ve eşikler Railway Variables ile ayarlanabilir.
+        # Başlangıç önerisi: MARKER_IMGSZ=416, MARKER_CONF=0.35.
+        # Daha hızlı ama daha az hassas: MARKER_IMGSZ=320.
+        results = model.predict(
+            frame,
+            verbose=False,
+            imgsz=MARKER_IMGSZ,
+            conf=MARKER_CONF,
+            iou=MARKER_IOU,
+        )
         all_points = []
         for r in results:
             if r.boxes is None:
