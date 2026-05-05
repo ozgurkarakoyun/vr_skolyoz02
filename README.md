@@ -147,3 +147,29 @@ Bu sürümde seans kaydı fizyoterapistin telefon ekranından başlatılır ve b
 
 ## Sesli komut/motivasyon nasıl çalışır?
 Ayrı MP3/WAV dosyası yüklenmesi gerekmez. Program tarayıcının yerleşik Web Speech API `speechSynthesis` motorunu kullanır. Bu nedenle ses kalitesi, dil desteği ve çalışıp çalışmaması kullanılan cihaza/tarayıcıya bağlıdır. Chrome/Edge genellikle destekler; bazı TV tarayıcılarında ses desteği sınırlı olabilir. Böyle bir durumda ileride `/static/audio/` içine gerçek ses dosyaları koyup MP3 tabanlı oynatma sistemine geçilebilir.
+
+## Türkçe Seslendirme
+
+Bu sürümde seslendirme Türkçe olarak zorlanır. Program önce tarayıcıdaki `tr-TR` seslerini arar; varsa Türkçe sesi seçer ve konuşma hızını daha doğal olması için yavaşlatır.
+
+Daha doğal/insan sesi istenirse MP3 dosyaları kullanılabilir. Aşağıdaki klasöre aynı isimlerle dosya koyulduğunda program önce bu kayıtları çalar, dosya yoksa otomatik Türkçe TTS'e düşer:
+
+```text
+static/voice/tr/
+```
+
+Örnek dosya adları:
+
+```text
+session_start.mp3
+excellent.mp3
+continue.mp3
+posture_better.mp3
+very_good.mp3
+breathe_in.mp3
+hold.mp3
+breathe_out.mp3
+warning.mp3
+```
+
+Tarayıcıya göre ses kalitesi değişir. Chrome/Edge genellikle daha iyi Türkçe ses verir. TV tarayıcısında Türkçe ses paketi yoksa mümkünse harici Android TV Chrome/Edge veya bilgisayardan HDMI yansıtma önerilir.

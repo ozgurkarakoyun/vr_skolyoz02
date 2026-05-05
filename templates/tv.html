@@ -93,7 +93,7 @@ function applySessionState(d){
     try{ exerciseTracker.startSession(ACTIVE_SESSION_CODE); }catch(e){}
     const b=document.getElementById('sessionStateBtn'); if(b) b.textContent='▶ Seans aktif';
     document.getElementById('tickerMain').textContent='Seans başladı';
-    if(window.schrothAudio?.enabled) schrothAudio._speak?.('Seans başladı. Hazırsanız başlayalım.', 'high');
+    if(window.schrothAudio?.enabled) schrothAudio.speakSessionStart?.();
   } else {
     ACTIVE_SESSION_CODE=null; started=false;
     const b=document.getElementById('sessionStateBtn'); if(b) b.textContent='⏸ Seans bekleniyor';
@@ -116,7 +116,21 @@ function drawOverlay(a){
   // Ek overlay gerekirse burada geliştirilebilir.
 }
 
-function toggleAudio(){ const en=schrothAudio.toggle(); const b=document.getElementById('audioBtn'); b.textContent=en?'🔊 Ses':'🔇 Ses'; }
+function toggleAudio(){
+  const en=schrothAudio.toggle();
+  const b=document.getElementById('audioBtn');
+  b.textContent=en?'🔊 Türkçe Ses':'🔇 Ses';
+  updateAudioStatus(schrothAudio.getStatus?.());
+}
+function updateAudioStatus(st){
+  if(!st) return;
+  const sub=document.getElementById('tickerSub');
+  if(!sub) return;
+  if(st.enabled && st.voiceName){ sub.textContent = `Türkçe ses aktif: ${st.voiceName}`; }
+  else if(st.enabled && st.warning){ sub.textContent = st.warning; }
+  else if(!started){ sub.textContent = 'Sesli Türkçe motivasyon için ses düğmesini açın.'; }
+}
+window.addEventListener('schrothAudioStatus', e=>updateAudioStatus(e.detail));
 </script>
 </body>
 </html>

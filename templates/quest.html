@@ -520,7 +520,7 @@ function applySessionState(d){
     document.getElementById('liveStats').style.display = 'block';
     if(btn){ btn.textContent='▶ Seans aktif'; btn.style.color='#2ed573'; btn.style.borderColor='rgba(46,213,115,.25)'; }
     if(socket?.connected && PATIENT_ID) socket.emit('link_patient',{room:SESSION,patient_id:PATIENT_ID});
-    if(window.schrothAudio?.enabled) schrothAudio._speak?.('Seans başladı. Hazırsanız başlayalım.', 'high');
+    if(window.schrothAudio?.enabled) schrothAudio.speakSessionStart?.();
   } else {
     SESSION_STARTED = false;
     ACTIVE_SESSION_CODE = null;
@@ -563,10 +563,20 @@ setInterval(() => {
 function toggleAudio() {
   const enabled = schrothAudio.toggle();
   const btn = document.getElementById('audioBtn');
-  btn.textContent = enabled ? '🔊' : '🔇';
+  btn.textContent = enabled ? '🔊 TR' : '🔇';
+  btn.title = enabled ? 'Türkçe ses açık' : 'Ses kapalı';
   btn.style.color = enabled ? '#00e5ff' : '#5a7a8a';
   btn.style.borderColor = enabled ? 'rgba(0,229,255,.3)' : 'rgba(255,255,255,.1)';
+  updateAudioStatus(schrothAudio.getStatus?.());
 }
+function updateAudioStatus(st){
+  if(!st) return;
+  const el = document.getElementById('audioStatus') || document.getElementById('statusText');
+  if(!el) return;
+  if(st.enabled && st.voiceName) el.textContent = `Türkçe ses aktif: ${st.voiceName}`;
+  else if(st.enabled && st.warning) el.textContent = st.warning;
+}
+window.addEventListener('schrothAudioStatus', e=>updateAudioStatus(e.detail));
 
 // Tracker güncelleme — analysis eventine bağla
 let prevAnalysis = null;
