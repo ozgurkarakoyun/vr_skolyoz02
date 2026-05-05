@@ -9,6 +9,7 @@ import sqlite3
 import os
 import json
 import logging
+import secrets
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -42,6 +43,24 @@ def get_db():
     finally:
         conn.close()
 
+
+# ─── Hasta kullanıcı kodu ─────────────────────────────────────
+
+def _make_code(length=6):
+    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+def _generate_unique_patient_code(conn, length=6):
+    for _ in range(100):
+        code = _make_code(length)
+        exists = conn.execute("SELECT 1 FROM patients WHERE user_code=?", (code,)).fetchone()
+        if not exists:
+            return code
+    return _make_code(8)
+
+def normalize_user_code(code):
+    return ''.join(ch for ch in str(code or '').upper().strip() if ch.isalnum())
+
 # ─── Şema ────────────────────────────────────────────────────
 
 def init_db():
@@ -57,6 +76,7 @@ def init_db():
             cobb_angle  REAL DEFAULT 0,
             risser      INTEGER DEFAULT 0,
             notes       TEXT DEFAULT '',
+            user_code   TEXT UNIQUE,
             created_at  TEXT DEFAULT (datetime('now')),
             updated_at  TEXT DEFAULT (datetime('now'))
         );
@@ -86,6 +106,15 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sessions_patient ON sessions(patient_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_code ON sessions(session_code);
         """)
+
+        # Eski veritabanlarına hasta kullanıcı kodu alanını ekle
+        cols = [r['name'] for r in conn.execute("PRAGMA table_info(patients)").fetchall()]
+        if 'user_code' not in cols:
+            conn.execute("ALTER TABLE patients ADD COLUMN user_code TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_patients_user_code ON patients(user_code)")
+        rows = conn.execute("SELECT id FROM patients WHERE user_code IS NULL OR user_code='' ").fetchall()
+        for row in rows:
+            conn.execute("UPDATE patients SET user_code=? WHERE id=?", (_generate_unique_patient_code(conn), row['id']))
     # Yeni kurulumlarda aynı seans kodunun tekrar kullanılmasını engelle.
     # Eski DB'de duplicate varsa uygulama çökmesin; create_session ayrıca mevcut kaydı döndürür.
     try:
@@ -98,18 +127,27 @@ def init_db():
 # ─── Hasta CRUD ──────────────────────────────────────────────
 
 def create_patient(name, birth_year=None, gender='—', diagnosis='',
-                   curve_type='', cobb_angle=0, risser=0, notes=''):
+                   curve_type='', cobb_angle=0, risser=0, notes='', user_code=None):
     with get_db() as conn:
+        code = normalize_user_code(user_code) if user_code else _generate_unique_patient_code(conn)
         cur = conn.execute("""
             INSERT INTO patients (name, birth_year, gender, diagnosis,
-                                  curve_type, cobb_angle, risser, notes)
-            VALUES (?,?,?,?,?,?,?,?)
-        """, (name, birth_year, gender, diagnosis, curve_type, cobb_angle, risser, notes))
+                                  curve_type, cobb_angle, risser, notes, user_code)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (name, birth_year, gender, diagnosis, curve_type, cobb_angle, risser, notes, code))
         return cur.lastrowid
 
 def get_patient(patient_id):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM patients WHERE id=?", (patient_id,)).fetchone()
+        return dict(row) if row else None
+
+def get_patient_by_code(user_code):
+    code = normalize_user_code(user_code)
+    if not code:
+        return None
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM patients WHERE user_code=?", (code,)).fetchone()
         return dict(row) if row else None
 
 def get_all_patients():
@@ -128,8 +166,10 @@ def get_all_patients():
 
 def update_patient(patient_id, **kwargs):
     allowed = {'name','birth_year','gender','diagnosis','curve_type',
-               'cobb_angle','risser','notes'}
+               'cobb_angle','risser','notes','user_code'}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if 'user_code' in fields:
+        fields['user_code'] = normalize_user_code(fields['user_code'])
     if not fields:
         return
     fields['updated_at'] = datetime.now().isoformat()

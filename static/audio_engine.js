@@ -37,6 +37,14 @@ class SchrothAudioEngine {
 
     // Skor milestone takibi
     this.lastMilestone = 0;
+    this.bestScore = 0;
+    this.lastMotivationAt = 0;
+    this.motivationPhrases = [
+      'Harikasınız, böyle devam edin.',
+      'Çok güzel, duruşunuz iyileşiyor.',
+      'Mükemmel gidiyorsunuz, aynı şekilde devam.',
+      'Tebrikler, kontrolünüz daha iyi.'
+    ];
 
     this._initVoice();
     this._initAudioCtx();
@@ -106,8 +114,9 @@ class SchrothAudioEngine {
     const scol = analysis.scoliosis;
     const phase = analysis.phase;
 
-    // ── 1. Skor milestone ──────────────────────────────────
+    // ── 1. Skor milestone + motivasyon ─────────────────────
     this._checkScoreMilestone(score);
+    this._checkMotivation(score);
 
     // ── 2. Kritik açı uyarısı ─────────────────────────────
     if (scol) this._checkCriticalAngle(scol);
@@ -152,6 +161,27 @@ class SchrothAudioEngine {
     // Skor düşerse milestone sıfırla
     if (score < 45 && this.lastMilestone > 0) {
       this.lastMilestone = 0;
+    this.bestScore = 0;
+    this.lastMotivationAt = 0;
+    this.motivationPhrases = [
+      'Harikasınız, böyle devam edin.',
+      'Çok güzel, duruşunuz iyileşiyor.',
+      'Mükemmel gidiyorsunuz, aynı şekilde devam.',
+      'Tebrikler, kontrolünüz daha iyi.'
+    ];
+    }
+  }
+
+  _checkMotivation(score) {
+    const now = Date.now();
+    if (score >= 70 && score >= this.bestScore + 5 && now - this.lastMotivationAt > 18000) {
+      this.bestScore = score;
+      this.lastMotivationAt = now;
+      const text = this.motivationPhrases[Math.floor(Math.random() * this.motivationPhrases.length)];
+      this.beep('milestone_mid');
+      this._speak(text, 'high');
+    } else if (score > this.bestScore) {
+      this.bestScore = score;
     }
   }
 

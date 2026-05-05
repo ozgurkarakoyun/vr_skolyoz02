@@ -227,12 +227,13 @@
     </div>
     <div style="font-size:13px;color:#5a7a8a;margin-bottom:4px">Hasta</div>
     <div style="font-family:'Syne',sans-serif;font-size:1rem;font-weight:700;margin-bottom:16px" id="smPatientName">—</div>
-    <div style="font-size:11px;letter-spacing:1.5px;color:#2a4455;margin-bottom:4px">SEANS KODU</div>
+    <div style="font-size:11px;letter-spacing:1.5px;color:#2a4455;margin-bottom:4px">HASTA KULLANICI KODU</div>
     <div class="session-id-big" id="smSessionCode">—</div>
     <div class="qr-placeholder" id="smQrWrap"></div>
     <div style="display:flex;flex-direction:column;gap:9px;margin-top:20px">
       <a id="smPhoneLink" href="#" target="_blank" style="display:block;padding:12px;background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.2);color:var(--accent);border-radius:10px;text-align:center;text-decoration:none;font-size:13px;font-weight:500">📱 Terapist Ekranını Aç</a>
       <a id="smQuestLink" href="#" target="_blank" style="display:block;padding:12px;background:rgba(123,47,255,.1);border:1px solid rgba(123,47,255,.2);color:#a78bfa;border-radius:10px;text-align:center;text-decoration:none;font-size:13px;font-weight:500">🥽 Quest Ekranını Aç</a>
+      <a id="smTvLink" href="#" target="_blank" style="display:block;padding:12px;background:rgba(46,213,115,.1);border:1px solid rgba(46,213,115,.2);color:#2ed573;border-radius:10px;text-align:center;text-decoration:none;font-size:13px;font-weight:500">📺 TV Ekranını Aç</a>
     </div>
   </div>
 </div>
@@ -303,7 +304,7 @@ function renderPatients(patients) {
         </div>
       </div>
       <div class="pc-actions">
-        <button class="pc-btn pc-btn-primary" onclick="event.stopPropagation();openSessionModal(${p.id},'${escHtml(p.name)}')">▶ Seans Başlat</button>
+        <button class="pc-btn pc-btn-primary" onclick="event.stopPropagation();openSessionModal(${p.id},'${escHtml(p.name)}','${escHtml(p.user_code||'')}')">▶ Seans Başlat</button>
         <a class="pc-btn pc-btn-secondary" href="/patient/${p.id}" onclick="event.stopPropagation()">📋 Detay</a>
       </div>
     </div>`;
@@ -375,29 +376,22 @@ async function submitPatient() {
 let currentSessionPatientId = null;
 let currentSessionCode = null;
 
-function openSessionModal(patientId, patientName) {
+function openSessionModal(patientId, patientName, patientCode) {
   currentSessionPatientId = patientId;
-  currentSessionCode = generateCode();
+  currentSessionCode = patientCode || generateCode();
   document.getElementById('smPatientName').textContent = patientName;
   document.getElementById('smSessionCode').textContent = currentSessionCode;
 
   const base = window.location.origin;
-  document.getElementById('smPhoneLink').href  = `${base}/phone?session=${currentSessionCode}&patient=${patientId}`;
-  document.getElementById('smQuestLink').href  = `${base}/quest?session=${currentSessionCode}&patient=${patientId}`;
+  document.getElementById('smPhoneLink').href  = `${base}/phone?code=${currentSessionCode}&patient=${patientId}`;
+  document.getElementById('smQuestLink').href  = `${base}/quest?code=${currentSessionCode}&patient=${patientId}`;
+  document.getElementById('smTvLink').href     = `${base}/tv?code=${currentSessionCode}&patient=${patientId}`;
 
-  // QR kodu
   const qrWrap = document.getElementById('smQrWrap');
   qrWrap.innerHTML = '<div style="margin:12px auto;width:100px;height:100px;background:rgba(0,0,0,.3);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#2a4455;font-size:11px">QR yükleniyor...</div>';
-  loadQR(`${base}/quest?session=${currentSessionCode}&patient=${patientId}`, qrWrap);
+  loadQR(`${base}/tv?code=${currentSessionCode}&patient=${patientId}`, qrWrap);
 
   document.getElementById('sessionModal').classList.add('open');
-
-  // DB'ye seans kaydı oluştur
-  fetch('/api/sessions/start', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ patient_id: patientId, session_code: currentSessionCode })
-  }).catch(()=>{});
 }
 
 function closeSessionModal() {

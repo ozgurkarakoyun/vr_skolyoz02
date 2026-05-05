@@ -154,6 +154,7 @@
       </div>
     </div>
     <div class="btn-row">
+      <button class="vr-btn" id="startSessionBtn" onclick="startExerciseSession()" style="background:linear-gradient(135deg,#00e5ff,#00a6ff);color:#001018">▶ Seansı Başlat</button>
       <button class="reset-btn" onclick="resetSession()" title="Seans sıfırla">↺</button>
       <button id="audioBtn" onclick="toggleAudio()" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#5a7a8a;padding:13px 15px;border-radius:11px;cursor:pointer;font-size:1rem" title="Ses">🔇</button>
       <button class="vr-btn" id="vrBtn" onclick="enterVR()" disabled>🥽 VR Modunu Başlat</button>
@@ -168,9 +169,17 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
-const SESSION = params.get('session') || localStorage.getItem('schroth_session') || 'DEFAULT';
-const PATIENT_ID = params.get('patient');
-document.getElementById('sessionDisplay').textContent = SESSION;
+function cleanCode(v){ return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+let SESSION = cleanCode(params.get('code') || params.get('session') || localStorage.getItem('schroth_user_code') || localStorage.getItem('schroth_session') || '');
+let PATIENT_ID = params.get('patient');
+let ACTIVE_SESSION_CODE = null;
+let SESSION_STARTED = false;
+if(!SESSION){
+  const c = prompt('Hasta kullanıcı kodunu girin:');
+  SESSION = cleanCode(c || '');
+}
+if(SESSION) localStorage.setItem('schroth_user_code', SESSION);
+document.getElementById('sessionDisplay').textContent = SESSION || 'KOD YOK';
 
 let socket, xrSession=null, xrRefSpace=null, gl=null, tex=null, offCanvas=null, offCtx=null;
 let latestAnalysis=null, hasFeed=false;
@@ -474,10 +483,10 @@ async function endAndSaveSession() {
   };
 
   try {
-    await fetch(`/api/sessions/${SESSION}/end`, {
+    await fetch('/api/access/end', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
+      body: JSON.stringify({user_code: SESSION, session_code: ACTIVE_SESSION_CODE || SESSION, data: payload})
     });
     console.log('[Session] Saved to DB');
     return payload;
@@ -492,15 +501,35 @@ function downloadPDF() {
   const pid = latestAnalysis?.patient_id;
   const url = pid
     ? `/api/patients/${pid}/report.pdf`
-    : `/api/sessions/${SESSION}/report.pdf`;
+    : `/api/sessions/${ACTIVE_SESSION_CODE || SESSION}/report.pdf`;
   window.open(url, '_blank');
 }
 
-initSocket();
+if(SESSION) initSocket();
 
 // ── Tracker & Audio Init ─────────────────────────────────
-exerciseTracker.startSession(SESSION);
-document.getElementById('liveStats').style.display = 'block';
+async function startExerciseSession() {
+  if(!SESSION){ alert('Hasta kullanıcı kodu yok.'); return; }
+  try {
+    const r = await fetch('/api/access/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({user_code: SESSION})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'Seans başlatılamadı');
+    ACTIVE_SESSION_CODE = d.session_code;
+    PATIENT_ID = d.patient_id;
+    SESSION_STARTED = true;
+    exerciseTracker.startSession(ACTIVE_SESSION_CODE);
+    document.getElementById('liveStats').style.display = 'block';
+    document.getElementById('endBtn').style.display = 'block';
+    const startBtn = document.getElementById('startSessionBtn');
+    if(startBtn){ startBtn.style.display='none'; }
+    if(socket?.connected) socket.emit('link_patient',{room:SESSION,patient_id:PATIENT_ID});
+    if(window.schrothAudio?.enabled) schrothAudio._speak?.('Seans başladı. Hazırsanız başlayalım.', 'high');
+  } catch(e) { alert(e.message); }
+}
 
 // Nefes metronom event
 window.addEventListener('breathPhase', (e) => {
@@ -545,12 +574,10 @@ function toggleAudio() {
 // Tracker güncelleme — analysis eventine bağla
 let prevAnalysis = null;
 const _origUpdateNormalUI = updateNormalUI;
-// Seans başladığında Bitir butonu göster
-socket.on('peer_joined', () => {
-  document.getElementById('endBtn').style.display = 'block';
-});
+// Telefon/TV bağlanınca yalnızca görüntü akışı başlar; seans kaydı Başlat tuşuyla başlar.
 
 async function handleEndSession() {
+  if (!SESSION_STARTED || !ACTIVE_SESSION_CODE) { alert('Önce Seansı Başlat tuşuna basın.'); return; }
   if (!confirm('Seansı bitirmek ve kaydetmek istiyor musunuz?')) return;
   const payload = await endAndSaveSession();
   schrothAudio.disable();
@@ -565,9 +592,11 @@ async function handleEndSession() {
 
 window.updateNormalUI = function(a) {
   _origUpdateNormalUI(a);
-  exerciseTracker.update(a);
-  schrothAudio.update(a, prevAnalysis);
-  prevAnalysis = a;
+  if(SESSION_STARTED){
+    exerciseTracker.update(a);
+    schrothAudio.update(a, prevAnalysis);
+    prevAnalysis = a;
+  }
 };
 </script>
 <!-- Klinik Uyarı -->

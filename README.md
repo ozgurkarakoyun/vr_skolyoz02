@@ -128,3 +128,15 @@ Marker kaçırıyorsa:
 MARKER_IMGSZ=512
 MARKER_CONF=0.25
 ```
+
+## 2026-05 Güncellemesi — Hasta Kodu, TV Modu ve Manuel Seans
+
+Bu sürümde her hastaya kalıcı bir `user_code` atanır. Seans ekranları artık sürekli rastgele seans kodu üretmek yerine bu hasta koduyla açılır:
+
+- Telefon kamera: `/phone?code=HASTAKODU`
+- Meta Quest: `/quest?code=HASTAKODU`
+- TV tam ekran: `/tv?code=HASTAKODU`
+
+Seans kaydı hasta ekranında **Seansı Başlat** tuşuna basılmadan başlamaz. Telefon yalnızca görüntü aktarır; egzersiz kaydı Quest/TV ekranındaki başlatma tuşuyla açılır ve bitirme tuşuyla veritabanına kaydedilir.
+
+TV modu, VR gözlüğü olmayan hastalar için görüntüyü ekranı tamamen kaplayacak şekilde (`object-fit: cover`) gösterir. Sesli motivasyon geri bildirimleri Web Speech API ile çalışır; tarayıcı ve cihaz ses izinlerine bağlıdır.

@@ -200,6 +200,7 @@ function renderProfile(p) {
   if (p.curve_type) tags.innerHTML += `<span class="tag tag-curve">Schroth ${p.curve_type}</span>`;
   if (p.cobb_angle) tags.innerHTML += `<span class="tag tag-cobb">Rad. Cobb ${p.cobb_angle}°</span>`;
   if (p.risser != null) tags.innerHTML += `<span class="tag tag-risser">Risser ${p.risser}</span>`;
+  if (p.user_code) tags.innerHTML += `<span class="tag" style="background:rgba(0,229,255,.08);color:#00e5ff;border:1px solid rgba(0,229,255,.2)">Hasta Kodu ${escapeHTML(p.user_code)}</span>`;
 }
 
 function renderStats(s) {
@@ -338,17 +339,20 @@ async function deletePatient() {
 
 // ── Yeni Seans ────────────────────────────────────────────
 function startSession() {
-  const code = Array.from({length:6}, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
+  const code = patientData?.user_code;
+  if(!code){ alert('Bu hastanın kullanıcı kodu yok. Sayfayı yenileyin veya hasta kaydını güncelleyin.'); return; }
   const base = window.location.origin;
-  const url  = `${base}/phone?session=${code}&patient=${PATIENT_ID}`;
+  const phone = `${base}/phone?code=${code}&patient=${PATIENT_ID}`;
+  const quest = `${base}/quest?code=${code}&patient=${PATIENT_ID}`;
+  const tv    = `${base}/tv?code=${code}&patient=${PATIENT_ID}`;
+  window.open(phone, '_blank');
+  alert(`Hasta Kodu: ${code}
 
-  fetch('/api/sessions/start', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({patient_id: PATIENT_ID, session_code: code})
-  });
+Telefon: /phone?code=${code}
+Quest: /quest?code=${code}
+TV: /tv?code=${code}
 
-  window.open(url, '_blank');
-  alert(`Seans Kodu: ${code}\n\nTelefon: /phone?session=${code}\nQuest: /quest?session=${code}`);
+Seans kaydı hasta ekranındaki “Seansı Başlat” tuşuyla başlar.`);
 }
 
 function downloadPDF() {

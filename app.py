@@ -93,9 +93,9 @@ def _import_cv2():
 # ── Database — hata olursa uygulama çökmez ───────────────────
 try:
     from database import (
-        create_patient, get_patient, get_all_patients, update_patient, delete_patient,
+        create_patient, get_patient, get_patient_by_code, get_all_patients, update_patient, delete_patient,
         create_session, end_session, get_patient_sessions, get_session_by_code,
-        get_patient_stats,
+        get_patient_stats, normalize_user_code,
     )
     DB_OK = True
     logger.info("Database OK")
@@ -105,6 +105,8 @@ except Exception as e:
     # Stub fonksiyonlar — uygulama yine de açılır
     def get_all_patients(): return []
     def get_patient(pid): return None
+    def get_patient_by_code(code): return None
+    def normalize_user_code(code): return str(code or '').upper().strip()
     def create_patient(**kw): return None
     def update_patient(pid, **kw): pass
     def delete_patient(pid): pass
@@ -162,6 +164,7 @@ except Exception as e:
 # ─── Seans havuzu ────────────────────────────────────────────
 _analyzers: dict = {}
 _session_patients: dict = {}
+_active_session_codes: dict = {}  # room/user_code -> current DB session_code
 _recent_values: dict = {}
 
 # ─── Performans / frame kuyruğu ayarları ─────────────────────
@@ -373,6 +376,10 @@ def phone():
 def quest():
     return render_template('quest.html')
 
+@app.route('/tv')
+def tv():
+    return render_template('tv.html')
+
 @app.route('/patient/<int:pid>')
 @require_auth
 def patient_detail(pid):
@@ -480,6 +487,7 @@ def api_create_patient():
         cobb_angle=d.get('cobb_angle', 0),
         risser=d.get('risser', 0),
         notes=d.get('notes', ''),
+        user_code=d.get('user_code') or d.get('access_code'),
     )
     return jsonify({'id': pid, 'status': 'created'}), 201
 
@@ -542,7 +550,73 @@ def api_start_session():
     except ValueError as e:
         return jsonify({'error': str(e)}), 409
     _session_patients[code] = int(pid)
-    return jsonify({'session_db_id': sid, 'status': 'started'})
+    _active_session_codes[code] = code
+    return jsonify({'session_db_id': sid, 'status': 'started', 'room_code': code, 'session_code': code})
+
+
+# ─── Hasta erişim kodu API ────────────────────────────────────
+@app.route('/api/access/<code>', methods=['GET'])
+def api_access_lookup(code):
+    if not DB_OK:
+        return jsonify({'error': 'DB kullanılamıyor'}), 503
+    p = get_patient_by_code(code)
+    if not p:
+        return jsonify({'error': 'Kod bulunamadı'}), 404
+    return jsonify({
+        'patient_id': p['id'],
+        'name': p.get('name', ''),
+        'user_code': p.get('user_code'),
+        'room_code': p.get('user_code'),
+    })
+
+@app.route('/api/access/start', methods=['POST'])
+def api_access_start_session():
+    if not DB_OK:
+        return jsonify({'error': 'DB kullanılamıyor'}), 503
+    d = request.json or {}
+    code = normalize_user_code(d.get('user_code') or d.get('code') or d.get('room_code'))
+    p = get_patient_by_code(code)
+    if not p:
+        return jsonify({'error': 'Hasta kodu bulunamadı'}), 404
+    # Kalıcı kullanıcı kodu oda olarak kullanılır; DB için her başlangıçta benzersiz seans kodu oluşturulur.
+    session_code = f"{code}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    sid = create_session(int(p['id']), session_code)
+    _session_patients[code] = int(p['id'])
+    _active_session_codes[code] = session_code
+    return jsonify({
+        'status': 'started',
+        'patient_id': p['id'],
+        'room_code': code,
+        'session_code': session_code,
+        'session_db_id': sid,
+    })
+
+@app.route('/api/access/<code>/active', methods=['GET'])
+def api_access_active_session(code):
+    room = normalize_user_code(code)
+    return jsonify({
+        'room_code': room,
+        'active_session_code': _active_session_codes.get(room),
+        'patient_id': _session_patients.get(room),
+        'active': bool(_active_session_codes.get(room)),
+    })
+
+@app.route('/api/access/end', methods=['POST'])
+def api_access_end_session():
+    if not DB_OK:
+        return jsonify({'error': 'DB kullanılamıyor'}), 503
+    d = request.json or {}
+    room = normalize_user_code(d.get('user_code') or d.get('code') or d.get('room_code'))
+    session_code = d.get('session_code') or _active_session_codes.get(room)
+    if not room or not session_code:
+        return jsonify({'error': 'Aktif seans bulunamadı'}), 404
+    active = _active_session_codes.get(room)
+    if active and active != session_code:
+        return jsonify({'error': 'Seans kodu aktif oda ile eşleşmiyor'}), 409
+    payload = dict(d.get('data') or {})
+    end_session(session_code, payload)
+    _active_session_codes.pop(room, None)
+    return jsonify({'status': 'ended', 'session_code': session_code})
 
 # ─── PDF routes ───────────────────────────────────────────────
 @app.route('/api/patients/<int:pid>/report.pdf')
@@ -632,6 +706,9 @@ def _emit_processed_frame(room: str, image_b64: str, analysis: dict):
     pid = _resolve_patient_id(room)
     if pid:
         analysis['patient_id'] = pid
+    active_code = _active_session_codes.get(room)
+    if active_code:
+        analysis['active_session_code'] = active_code
 
     # Quest'e gönderilecek görüntü:
     # Marker tespit edildiyse → çizimli versiyon; aksi halde → orijinal görüntü.

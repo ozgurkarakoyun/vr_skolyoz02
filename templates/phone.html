@@ -152,8 +152,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
-const SESSION = params.get('session') || localStorage.getItem('schroth_session') || 'DEFAULT';
+let SESSION = (params.get('code') || params.get('session') || localStorage.getItem('schroth_user_code') || localStorage.getItem('schroth_session') || '').toUpperCase();
 const PATIENT_ID = params.get('patient');
+if(!SESSION){ SESSION = 'KOD GİR'; }
 document.getElementById('sessionDisplay').textContent = SESSION;
 let socket, stream, frameInterval, frameCount=0, lastFpsTime=Date.now();
 
@@ -165,6 +166,13 @@ function initSocket() {
 }
 
 async function startCamera() {
+  if(SESSION === 'KOD GİR' || SESSION === 'DEFAULT') {
+    const c = prompt('Hasta kullanıcı kodunu girin:');
+    if(!c) return;
+    SESSION = c.toUpperCase().replace(/[^A-Z0-9]/g,'');
+    localStorage.setItem('schroth_user_code', SESSION);
+    document.getElementById('sessionDisplay').textContent = SESSION;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:960},height:{ideal:540}},audio:false});
     document.getElementById('localVideo').srcObject = stream;

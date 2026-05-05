@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schroth TV Modu</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#000;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;width:100vw;height:100vh;overflow:hidden}
+  #accessScreen{position:fixed;inset:0;background:radial-gradient(circle at 50% 20%,#10233a,#020407 70%);display:flex;align-items:center;justify-content:center;z-index:10}
+  .card{width:min(92vw,520px);background:rgba(5,10,15,.92);border:1px solid rgba(0,229,255,.22);border-radius:24px;padding:32px;box-shadow:0 30px 90px rgba(0,0,0,.6);text-align:center}
+  h1{font-size:2rem;margin-bottom:10px;color:#00e5ff}.muted{color:#8aa;line-height:1.5;margin-bottom:22px}
+  input{width:100%;font-size:2rem;text-align:center;letter-spacing:8px;text-transform:uppercase;padding:16px;border-radius:14px;background:#07111a;border:1px solid rgba(255,255,255,.16);color:#fff;outline:none;margin-bottom:14px}
+  button{border:0;border-radius:14px;padding:15px 22px;font-size:1rem;font-weight:800;cursor:pointer}
+  .primary{background:#00e5ff;color:#001018;width:100%;margin-top:8px}.secondary{background:rgba(255,255,255,.08);color:#ddd;border:1px solid rgba(255,255,255,.12)}
+  #tvUI{position:fixed;inset:0;background:#000;display:none}
+  #videoFeed{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+  #overlayCanvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:14px;padding:18px 24px;background:linear-gradient(to bottom,rgba(0,0,0,.82),transparent);z-index:2}
+  .badge{background:rgba(0,229,255,.14);border:1px solid rgba(0,229,255,.28);color:#00e5ff;border-radius:999px;padding:7px 14px;font-weight:700;letter-spacing:2px}.spacer{flex:1}.dot{width:12px;height:12px;border-radius:50%;background:#ff4757}.dot.connected{background:#2ed573}
+  .score{position:absolute;right:28px;top:86px;background:rgba(0,0,0,.7);border:1px solid rgba(0,229,255,.25);border-radius:20px;padding:16px 24px;text-align:center;z-index:2}.scoreNum{font-size:4rem;font-weight:900;line-height:.9}.scoreLbl{font-size:.8rem;color:#9ab;letter-spacing:2px;margin-top:6px}
+  .ticker{position:absolute;left:0;right:0;bottom:0;padding:80px 28px 28px;background:linear-gradient(to top,rgba(0,0,0,.9),transparent);text-align:center;z-index:2}.msg{font-size:2rem;color:#00e5ff;font-weight:800;text-shadow:0 2px 20px #000}.sub{font-size:1.1rem;color:#a78bfa;margin-top:8px}.controls{position:absolute;left:24px;bottom:24px;display:flex;gap:10px;z-index:3}.controls button{padding:12px 16px;border-radius:12px;font-size:.95rem}.hidden{display:none!important}
+  #waiting{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#8aa;z-index:1}.icon{font-size:4rem;margin-bottom:14px}.warn{position:absolute;bottom:0;left:0;right:0;background:rgba(255,165,2,.08);border-top:1px solid rgba(255,165,2,.2);color:#ffa502;text-align:center;font-size:12px;padding:7px;z-index:4}
+</style>
+</head>
+<body>
+<div id="accessScreen">
+  <div class="card">
+    <h1>📺 TV Modu</h1>
+    <p class="muted">Hastaya verilen kullanıcı kodunu girin. Telefon aynı kodla kamera modunda açılmalıdır.</p>
+    <input id="codeInput" maxlength="10" placeholder="KOD" autocomplete="off">
+    <button class="primary" onclick="prepareSession()">Kodu Doğrula</button>
+    <p id="accessMsg" class="muted" style="font-size:.9rem;margin-top:12px;margin-bottom:0"></p>
+  </div>
+</div>
+
+<div id="tvUI">
+  <img id="videoFeed" alt="Kamera görüntüsü">
+  <canvas id="overlayCanvas"></canvas>
+  <div id="waiting"><div><div class="icon">📱</div><div>Telefon kamerası bekleniyor...</div><div style="font-size:.9rem;margin-top:8px">Aynı kodla telefon modunu açın.</div></div></div>
+  <div class="top"><strong>Schroth TV</strong><span class="badge" id="sessionDisplay">—</span><span id="patientName"></span><span class="spacer"></span><div class="dot" id="statusDot"></div></div>
+  <div class="score"><div class="scoreNum" id="scoreNum">—</div><div class="scoreLbl">SKOR</div></div>
+  <div class="ticker"><div class="msg" id="tickerMain">Seansı başlatın</div><div class="sub" id="tickerSub">Sesli motivasyon için ses düğmesini açın.</div></div>
+  <div class="controls">
+    <button class="primary" id="startBtn" onclick="startExerciseSession()">▶ Seansı Başlat</button>
+    <button class="secondary" id="audioBtn" onclick="toggleAudio()">🔇 Ses</button>
+    <button class="secondary hidden" id="endBtn" onclick="handleEndSession()">✅ Bitir</button>
+  </div>
+  <div class="warn">⚠️ Marker tabanlı postür takip metriğidir; radyografik Cobb açısı değildir.</div>
+</div>
+
+<script src="/static/audio_engine.js"></script>
+<script src="/static/exercise_tracker.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+let ROOM = (params.get('code') || params.get('session') || localStorage.getItem('schroth_user_code') || '').toUpperCase();
+let PATIENT_ID = null;
+let ACTIVE_SESSION_CODE = null;
+let socket = null, latestAnalysis = null, prevAnalysis = null, started = false;
+
+function cleanCode(v){ return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+window.onload = () => { if(ROOM){ document.getElementById('codeInput').value = ROOM; prepareSession(); } };
+
+async function prepareSession(){
+  const code = cleanCode(document.getElementById('codeInput').value || ROOM);
+  if(!code){ document.getElementById('accessMsg').textContent='Kod girin.'; return; }
+  try{
+    const r = await fetch(`/api/access/${code}`);
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'Kod bulunamadı');
+    ROOM = d.room_code; PATIENT_ID = d.patient_id;
+    localStorage.setItem('schroth_user_code', ROOM);
+    document.getElementById('accessScreen').style.display='none';
+    document.getElementById('tvUI').style.display='block';
+    document.getElementById('sessionDisplay').textContent = ROOM;
+    document.getElementById('patientName').textContent = d.name || '';
+    initSocket();
+  }catch(e){ document.getElementById('accessMsg').textContent = e.message; }
+}
+
+function initSocket(){
+  socket = io();
+  socket.on('connect',()=>{document.getElementById('statusDot').classList.add('connected');socket.emit('join_room',{room:ROOM,role:'tv'});if(PATIENT_ID)socket.emit('link_patient',{room:ROOM,patient_id:PATIENT_ID});});
+  socket.on('disconnect',()=>document.getElementById('statusDot').classList.remove('connected'));
+  socket.on('analysis', d=>{ latestAnalysis=d.analysis; if(d.image){ const img=document.getElementById('videoFeed'); img.src=d.image.startsWith('data:')?d.image:'data:image/jpeg;base64,'+d.image; document.getElementById('waiting').style.display='none'; img.onload=()=>drawOverlay(d.analysis); } updateUI(d.analysis); });
+}
+
+async function startExerciseSession(){
+  try{
+    const r = await fetch('/api/access/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_code:ROOM})});
+    const d = await r.json(); if(!r.ok) throw new Error(d.error||'Seans başlatılamadı');
+    ACTIVE_SESSION_CODE = d.session_code; started = true;
+    exerciseTracker.startSession(ACTIVE_SESSION_CODE);
+    document.getElementById('startBtn').classList.add('hidden');
+    document.getElementById('endBtn').classList.remove('hidden');
+    document.getElementById('tickerMain').textContent='Seans başladı';
+    schrothAudio._speak?.('Seans başladı. Hazırsanız başlayalım.', 'high');
+  }catch(e){ alert(e.message); }
+}
+
+function updateUI(a){
+  if(!a) return;
+  const score = a.score || 0;
+  const s=document.getElementById('scoreNum'); s.textContent=score; s.style.color=score>=80?'#2ed573':score>=55?'#ffa502':'#ff4757';
+  const inst = a.phase_instruction || a.breath_instruction || (a.instructions&&a.instructions[0]) || 'Duruşunuzu koruyun';
+  document.getElementById('tickerMain').textContent = inst.replace(/[⬇️⬆️⬅️➡️↔️↙️↘️✅👍🫁📋]/gu,'').trim();
+  const scol = a.scoliosis; if(scol) document.getElementById('tickerSub').textContent = `T: ${scol.thoracic||0}° · TL: ${scol.thoracolumbar||0}° · L: ${scol.lumbar||0}°`;
+  if(started){ exerciseTracker.update(a); schrothAudio.update(a, prevAnalysis); prevAnalysis=a; }
+}
+
+function drawOverlay(a){
+  // TV modunda görüntü ekranı kapladığı için karmaşık koordinat yerine backend çizimli görüntü tercih edilir.
+  // Ek overlay gerekirse burada geliştirilebilir.
+}
+
+function toggleAudio(){ const en=schrothAudio.toggle(); const b=document.getElementById('audioBtn'); b.textContent=en?'🔊 Ses':'🔇 Ses'; }
+async function handleEndSession(){
+  if(!started || !ACTIVE_SESSION_CODE){ alert('Başlatılmış seans yok.'); return; }
+  const stats=exerciseTracker.getLiveStats(); const report=exerciseTracker.endSession();
+  const scol=latestAnalysis?.scoliosis;
+  const payload={duration:report?.duration||stats?.duration||0,frame_count:report?.frameCount||stats?.frameCount||0,avg_score:report?.scores?.avg||stats?.avgScore||0,best_score:report?.scores?.best||stats?.bestScore||0,rep_count:report?.repCount||stats?.repCount||0,avg_thoracic:scol?.thoracic||null,avg_thoracolumbar:scol?.thoracolumbar||null,avg_lumbar:scol?.lumbar||null,avg_shoulder:latestAnalysis?.shoulder_angle||null,avg_hip:latestAnalysis?.hip_angle||null,trend:report?.trend||'stable',phase_log:report?.phaseLog||[]};
+  await fetch('/api/access/end',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_code:ROOM,session_code:ACTIVE_SESSION_CODE,data:payload})});
+  document.getElementById('endBtn').textContent='✅ Kaydedildi'; document.getElementById('endBtn').disabled=true; started=false; schrothAudio.disable();
+}
+</script>
+</body>
+</html>
