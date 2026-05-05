@@ -40,11 +40,10 @@
   <div id="waiting"><div><div class="icon">📱</div><div>Telefon kamerası bekleniyor...</div><div style="font-size:.9rem;margin-top:8px">Aynı kodla telefon modunu açın.</div></div></div>
   <div class="top"><strong>Schroth TV</strong><span class="badge" id="sessionDisplay">—</span><span id="patientName"></span><span class="spacer"></span><div class="dot" id="statusDot"></div></div>
   <div class="score"><div class="scoreNum" id="scoreNum">—</div><div class="scoreLbl">SKOR</div></div>
-  <div class="ticker"><div class="msg" id="tickerMain">Seansı başlatın</div><div class="sub" id="tickerSub">Sesli motivasyon için ses düğmesini açın.</div></div>
+  <div class="ticker"><div class="msg" id="tickerMain">Telefon ekranından seans başlatılmasını bekliyor</div><div class="sub" id="tickerSub">Sesli motivasyon için ses düğmesini açın.</div></div>
   <div class="controls">
-    <button class="primary" id="startBtn" onclick="startExerciseSession()">▶ Seansı Başlat</button>
     <button class="secondary" id="audioBtn" onclick="toggleAudio()">🔇 Ses</button>
-    <button class="secondary hidden" id="endBtn" onclick="handleEndSession()">✅ Bitir</button>
+    <button class="secondary" id="sessionStateBtn" disabled>⏸ Seans bekleniyor</button>
   </div>
   <div class="warn">⚠️ Marker tabanlı postür takip metriğidir; radyografik Cobb açısı değildir.</div>
 </div>
@@ -81,22 +80,25 @@ async function prepareSession(){
 
 function initSocket(){
   socket = io();
-  socket.on('connect',()=>{document.getElementById('statusDot').classList.add('connected');socket.emit('join_room',{room:ROOM,role:'tv'});if(PATIENT_ID)socket.emit('link_patient',{room:ROOM,patient_id:PATIENT_ID});});
+  socket.on('connect',()=>{document.getElementById('statusDot').classList.add('connected');socket.emit('join_room',{room:ROOM,role:'tv'});if(PATIENT_ID)socket.emit('link_patient',{room:ROOM,patient_id:PATIENT_ID});socket.emit('session_state_request',{room:ROOM});});
   socket.on('disconnect',()=>document.getElementById('statusDot').classList.remove('connected'));
   socket.on('analysis', d=>{ latestAnalysis=d.analysis; if(d.image){ const img=document.getElementById('videoFeed'); img.src=d.image.startsWith('data:')?d.image:'data:image/jpeg;base64,'+d.image; document.getElementById('waiting').style.display='none'; img.onload=()=>drawOverlay(d.analysis); } updateUI(d.analysis); });
+  socket.on('session_state', applySessionState);
 }
 
-async function startExerciseSession(){
-  try{
-    const r = await fetch('/api/access/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_code:ROOM})});
-    const d = await r.json(); if(!r.ok) throw new Error(d.error||'Seans başlatılamadı');
-    ACTIVE_SESSION_CODE = d.session_code; started = true;
-    exerciseTracker.startSession(ACTIVE_SESSION_CODE);
-    document.getElementById('startBtn').classList.add('hidden');
-    document.getElementById('endBtn').classList.remove('hidden');
+function applySessionState(d){
+  if(!d) return;
+  if(d.active || d.status==='started'){
+    ACTIVE_SESSION_CODE=d.session_code; started=true;
+    try{ exerciseTracker.startSession(ACTIVE_SESSION_CODE); }catch(e){}
+    const b=document.getElementById('sessionStateBtn'); if(b) b.textContent='▶ Seans aktif';
     document.getElementById('tickerMain').textContent='Seans başladı';
-    schrothAudio._speak?.('Seans başladı. Hazırsanız başlayalım.', 'high');
-  }catch(e){ alert(e.message); }
+    if(window.schrothAudio?.enabled) schrothAudio._speak?.('Seans başladı. Hazırsanız başlayalım.', 'high');
+  } else {
+    ACTIVE_SESSION_CODE=null; started=false;
+    const b=document.getElementById('sessionStateBtn'); if(b) b.textContent='⏸ Seans bekleniyor';
+    document.getElementById('tickerMain').textContent='Telefon ekranından seans başlatılmasını bekliyor';
+  }
 }
 
 function updateUI(a){
@@ -115,14 +117,6 @@ function drawOverlay(a){
 }
 
 function toggleAudio(){ const en=schrothAudio.toggle(); const b=document.getElementById('audioBtn'); b.textContent=en?'🔊 Ses':'🔇 Ses'; }
-async function handleEndSession(){
-  if(!started || !ACTIVE_SESSION_CODE){ alert('Başlatılmış seans yok.'); return; }
-  const stats=exerciseTracker.getLiveStats(); const report=exerciseTracker.endSession();
-  const scol=latestAnalysis?.scoliosis;
-  const payload={duration:report?.duration||stats?.duration||0,frame_count:report?.frameCount||stats?.frameCount||0,avg_score:report?.scores?.avg||stats?.avgScore||0,best_score:report?.scores?.best||stats?.bestScore||0,rep_count:report?.repCount||stats?.repCount||0,avg_thoracic:scol?.thoracic||null,avg_thoracolumbar:scol?.thoracolumbar||null,avg_lumbar:scol?.lumbar||null,avg_shoulder:latestAnalysis?.shoulder_angle||null,avg_hip:latestAnalysis?.hip_angle||null,trend:report?.trend||'stable',phase_log:report?.phaseLog||[]};
-  await fetch('/api/access/end',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_code:ROOM,session_code:ACTIVE_SESSION_CODE,data:payload})});
-  document.getElementById('endBtn').textContent='✅ Kaydedildi'; document.getElementById('endBtn').disabled=true; started=false; schrothAudio.disable();
-}
 </script>
 </body>
 </html>

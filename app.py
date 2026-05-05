@@ -583,13 +583,20 @@ def api_access_start_session():
     sid = create_session(int(p['id']), session_code)
     _session_patients[code] = int(p['id'])
     _active_session_codes[code] = session_code
-    return jsonify({
+    state = {
         'status': 'started',
+        'active': True,
         'patient_id': p['id'],
         'room_code': code,
         'session_code': session_code,
         'session_db_id': sid,
-    })
+        'started_by': d.get('started_by') or 'phone',
+    }
+    try:
+        socketio.emit('session_state', state, to=code)
+    except Exception:
+        logger.warning('session_state emit failed', exc_info=True)
+    return jsonify(state)
 
 @app.route('/api/access/<code>/active', methods=['GET'])
 def api_access_active_session(code):
@@ -616,7 +623,12 @@ def api_access_end_session():
     payload = dict(d.get('data') or {})
     end_session(session_code, payload)
     _active_session_codes.pop(room, None)
-    return jsonify({'status': 'ended', 'session_code': session_code})
+    state = {'status': 'ended', 'active': False, 'room_code': room, 'session_code': session_code}
+    try:
+        socketio.emit('session_state', state, to=room)
+    except Exception:
+        logger.warning('session_state emit failed', exc_info=True)
+    return jsonify(state)
 
 # ─── PDF routes ───────────────────────────────────────────────
 @app.route('/api/patients/<int:pid>/report.pdf')
@@ -768,6 +780,19 @@ def _start_frame_worker_if_needed(room: str):
         _processing_rooms[room] = True
     socketio.start_background_task(_process_latest_frame_worker, room)
 
+
+
+@socketio.on('session_state_request')
+def on_session_state_request(data):
+    room = normalize_user_code((data or {}).get('room') or 'default')
+    active_code = _active_session_codes.get(room)
+    emit('session_state', {
+        'room_code': room,
+        'active': bool(active_code),
+        'status': 'started' if active_code else 'idle',
+        'session_code': active_code,
+        'patient_id': _session_patients.get(room),
+    })
 
 @socketio.on('frame')
 def on_frame(data):

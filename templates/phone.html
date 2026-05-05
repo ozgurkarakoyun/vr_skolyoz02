@@ -142,13 +142,16 @@
 
   <!-- Kontroller -->
   <div class="controls">
-    <button class="btn btn-start" id="startBtn" onclick="startCamera()">🎥 Başlat</button>
-    <button class="btn btn-stop" id="stopBtn" onclick="stopStream()" style="display:none">⏹ Durdur</button>
+    <button class="btn btn-start" id="startBtn" onclick="startCamera()">🎥 Kamera</button>
+    <button class="btn btn-start" id="startSessionBtn" onclick="startExerciseSession()" style="display:none;background:#2ed573;color:#041008">▶ Seansı Başlat</button>
+    <button class="btn btn-stop" id="endSessionBtn" onclick="handleEndSession()" style="display:none">✅ Seansı Bitir</button>
+    <button class="btn btn-stop" id="stopBtn" onclick="stopStream()" style="display:none">⏹ Kamera</button>
     <button class="btn btn-reset" onclick="resetSession()" title="Seans sıfırla">↺</button>
     <span class="fps-badge" id="fpsBadge">— FPS</span>
   </div>
 </div>
 
+<script src="/static/exercise_tracker.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
@@ -157,12 +160,17 @@ const PATIENT_ID = params.get('patient');
 if(!SESSION){ SESSION = 'KOD GİR'; }
 document.getElementById('sessionDisplay').textContent = SESSION;
 let socket, stream, frameInterval, frameCount=0, lastFpsTime=Date.now();
+let ACTIVE_SESSION_CODE = null;
+let SESSION_STARTED = false;
+let latestAnalysis = null;
 
 function initSocket() {
   socket = io();
   socket.on('connect', () => { document.getElementById('statusDot').classList.add('connected'); socket.emit('join_room',{room:SESSION,role:'phone'}); if(PATIENT_ID) socket.emit('link_patient',{room:SESSION,patient_id:PATIENT_ID}); });
   socket.on('disconnect', () => document.getElementById('statusDot').classList.remove('connected'));
-  socket.on('analysis', d => { if(d.analysis) updateUI(d.analysis); });
+  socket.on('analysis', d => { if(d.analysis) { latestAnalysis = d.analysis; updateUI(d.analysis); } });
+  socket.on('session_state', applySessionState);
+  socket.on('room_joined', () => socket.emit('session_state_request', {room: SESSION}));
 }
 
 async function startCamera() {
@@ -178,6 +186,7 @@ async function startCamera() {
     document.getElementById('localVideo').srcObject = stream;
     document.getElementById('startBtn').style.display='none';
     document.getElementById('stopBtn').style.display='block';
+    document.getElementById('startSessionBtn').style.display='block';
     initSocket(); startFrameCapture();
   } catch(e) { alert('Kamera: '+e.message); }
 }
@@ -188,6 +197,8 @@ function stopStream() {
   if(socket) socket.disconnect();
   document.getElementById('startBtn').style.display='block';
   document.getElementById('stopBtn').style.display='none';
+  document.getElementById('startSessionBtn').style.display='none';
+  document.getElementById('endSessionBtn').style.display='none';
   document.getElementById('statusDot').classList.remove('connected');
 }
 
@@ -236,6 +247,78 @@ function startFrameCapture() {
   }, FRAME_INTERVAL_MS);
 }
 
+
+async function startExerciseSession() {
+  if(!SESSION || SESSION === 'KOD GİR' || SESSION === 'DEFAULT') {
+    alert('Önce hasta kullanıcı kodunu girip kamerayı başlatın.');
+    return;
+  }
+  try {
+    const r = await fetch('/api/access/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({user_code: SESSION, started_by: 'phone'})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'Seans başlatılamadı');
+    applySessionState(d);
+    if(socket?.connected) socket.emit('session_state_request', {room: SESSION});
+  } catch(e) { alert(e.message); }
+}
+
+function applySessionState(d) {
+  if(!d) return;
+  if(d.active || d.status === 'started') {
+    ACTIVE_SESSION_CODE = d.session_code;
+    SESSION_STARTED = true;
+    try { exerciseTracker.startSession(ACTIVE_SESSION_CODE); } catch(e) {}
+    document.getElementById('startSessionBtn').style.display='none';
+    document.getElementById('endSessionBtn').style.display='block';
+    document.getElementById('sessionDisplay').textContent = SESSION + ' · AKTİF';
+  } else {
+    ACTIVE_SESSION_CODE = null;
+    SESSION_STARTED = false;
+    document.getElementById('startSessionBtn').style.display=stream ? 'block' : 'none';
+    document.getElementById('endSessionBtn').style.display='none';
+    document.getElementById('sessionDisplay').textContent = SESSION;
+  }
+}
+
+async function handleEndSession() {
+  if(!SESSION_STARTED || !ACTIVE_SESSION_CODE) { alert('Aktif seans yok.'); return; }
+  if(!confirm('Seansı bitirip kaydetmek istiyor musunuz?')) return;
+  let payload = {};
+  try {
+    const stats = exerciseTracker.getLiveStats?.() || {};
+    const report = exerciseTracker.endSession?.() || {};
+    const scol = latestAnalysis?.scoliosis;
+    payload = {
+      duration: report?.duration || stats?.duration || 0,
+      frame_count: report?.frameCount || stats?.frameCount || 0,
+      avg_score: report?.scores?.avg || stats?.avgScore || 0,
+      best_score: report?.scores?.best || stats?.bestScore || 0,
+      rep_count: report?.repCount || stats?.repCount || 0,
+      avg_thoracic: scol?.thoracic || null,
+      avg_thoracolumbar: scol?.thoracolumbar || null,
+      avg_lumbar: scol?.lumbar || null,
+      avg_shoulder: latestAnalysis?.shoulder_angle || null,
+      avg_hip: latestAnalysis?.hip_angle || null,
+      trend: report?.trend || 'stable',
+      phase_log: report?.phaseLog || []
+    };
+  } catch(e) {}
+  try {
+    const r = await fetch('/api/access/end', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_code: SESSION, session_code: ACTIVE_SESSION_CODE, data: payload})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'Seans kaydedilemedi');
+    applySessionState(d);
+    alert('Seans kaydedildi.');
+  } catch(e) { alert(e.message); }
+}
+
 function escapeHTML(s) {
   return String(s ?? '')
     .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
@@ -246,6 +329,8 @@ function resetSession() { if(socket?.connected) socket.emit('reset_session',{roo
 
 // ── UI Güncelleme ──────────────────────────────────────────
 function updateUI(a) {
+  latestAnalysis = a;
+  if(SESSION_STARTED){ try{ exerciseTracker.update(a); }catch(e){} }
   // Schroth skor
   const score=a.score||0;
   const se=document.getElementById('scoreNum');
